@@ -24,7 +24,49 @@ function ago(iso) {
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s / 60) + " min ago";
   if (s < 86400) return Math.floor(s / 3600) + " h ago"; return new Date(iso).toLocaleDateString();
 }
-function loading(msg = "Loading…") { app.innerHTML = `<div class="loading"><span class="spinner dark"></span>${esc(msg)}</div>`; }
+function loading(msg = "Loading…") {
+  app.innerHTML = `<div class="skeleton" aria-label="${esc(msg)}"><div class="sk h1"></div><div class="sk line" style="width:60%"></div>
+    <div class="sk-grid"><div class="sk block"></div><div class="sk block"></div></div><div class="sk line" style="width:80%"></div></div>`;
+}
+
+/* ---------- motion helpers ---------- */
+const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function enter(root = app) {
+  if (REDUCED) return;
+  root.classList.remove("page-enter"); void root.offsetWidth; root.classList.add("page-enter");
+  stagger(root);
+  countUp(root);
+}
+function stagger(root = app) {
+  if (REDUCED) return;
+  const groups = [".sample", ".step", ".kpi", ".clause", ".finding", ".feature-row .panel", "tbody tr", ".bar", ".timeline li"];
+  groups.forEach(sel => root.querySelectorAll(sel).forEach((el, i) => { if (i < 24) { el.style.setProperty("--i", i); el.classList.add("stagger"); } }));
+  root.querySelectorAll(".bar").forEach((el, i) => el.querySelector(".fill")?.style.setProperty("--i", i));
+  root.querySelectorAll("mark.hl").forEach((el, i) => el.style.setProperty("--i", i));
+}
+function countUp(root = app) {
+  if (REDUCED) return;
+  root.querySelectorAll(".kpi b").forEach(el => {
+    const m = el.textContent.trim().match(/^(\d+)(%?)(\/\d+)?$/); if (!m) return;
+    const end = +m[1], suffix = m[2] + (m[3] || ""); if (end < 2) return;
+    const t0 = performance.now(), dur = 700;
+    const tick = t => { const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3); el.textContent = Math.round(end * e) + suffix; if (p < 1) requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  });
+}
+const CHECK_STEPS = ["Exact rules: terms, claims, style", "Retrieving guideline clauses and facts", "AI review of tone, claims and legal", "Citation gate: dropping uncited flags", "Preparing minimal fixes"];
+function checkingOverlay() {
+  const el = document.createElement("div"); el.className = "checking";
+  el.innerHTML = `<div class="card" role="status"><b>Checking against the rulebook…</b>
+    <div class="scanbox"><span style="top:12px;width:70%"></span><span style="top:30px;width:45%"></span></div>
+    <ol>${CHECK_STEPS.map(t => `<li><span class="dot"></span>${t}</li>`).join("")}</ol></div>`;
+  document.body.appendChild(el);
+  const lis = [...el.querySelectorAll("li")]; let k = 0;
+  const adv = () => { if (k > 0) { lis[k - 1].className = "done"; lis[k - 1].querySelector(".dot").textContent = "✓"; } if (k < lis.length) lis[k].className = "on"; k++; };
+  adv(); const timer = setInterval(() => { if (k < lis.length) adv(); }, 1800);
+  return () => { clearInterval(timer); while (k <= lis.length) adv(); setTimeout(() => { el.style.transition = "opacity .25s"; el.style.opacity = "0"; setTimeout(() => el.remove(), 260); }, 250); };
+}
+async function withChecking(fn) { const done = checkingOverlay(); try { return await fn(); } finally { done(); } }
 
 async function api(method, path, body) {
   const res = await fetch(path, {
@@ -84,7 +126,7 @@ async function route() {
   if (S.token && !S.me) { try { await loadMe(); } catch (_) { S.token = null; localStorage.removeItem("bp_token"); location.hash = "#/"; return; } }
   for (const [re, fn] of routes) {
     const m = h.match(re);
-    if (m) { window.scrollTo(0, 0); try { await fn(...m.slice(1)); } catch (e) { app.innerHTML = `<div class="panel empty">${esc(e.message)}<br><br><a href="#/new">Back to New check</a></div>`; } return; }
+    if (m) { window.scrollTo(0, 0); try { await fn(...m.slice(1)); enter(); } catch (e) { app.innerHTML = `<div class="panel empty">${esc(e.message)}<br><br><a href="#/new">Back to New check</a></div>`; } return; }
   }
   location.hash = "#/";
 }
@@ -97,7 +139,7 @@ function landing() {
   <section class="hero">
     <div>
       <div class="pill cat" style="margin-bottom:.8rem">Brand governance before publication</div>
-      <h1>Catch off-brand content before anyone publishes it.</h1>
+      <h1>Catch <span class="grad">off-brand content</span> before anyone publishes it.</h1>
       <p class="lead">Brandproof checks posts, emails, blogs and images against your own brand guidelines, approved facts and assets. Every issue is explained with the exact clause or fact it breaks, comes with a minimal fix, and a person makes the final call.</p>
       <div class="hero-actions">
         <button class="btn-primary" id="startBtn">Start the demo, no sign-up →</button>
@@ -154,18 +196,20 @@ async function newCheck() {
     </div>
   </div>`;
   let image = null, pdf = null;
-  app.querySelectorAll("[data-sample]").forEach(b => b.onclick = () => busy(b, async () => {
+  app.querySelectorAll("[data-sample]").forEach(b => b.onclick = () => busy(b, () => withChecking(async () => {
     const d = await api("POST", "/api/drafts", { sample_id: b.dataset.sample, brand_id: S.brandId });
     await api("POST", `/api/drafts/${d.id}/check`); location.hash = "#/d/" + d.id;
-  }, "Checking…"));
+  }), "Checking…"));
   $("#fImage").onchange = async e => { image = e.target.files[0] ? await shrinkImage(e.target.files[0]) : null; $("#imgPrev").innerHTML = image ? `<img src="${image}" style="max-width:160px;border-radius:8px">` : ""; };
   $("#fPdf").onchange = async e => { pdf = e.target.files[0] ? await fileB64(e.target.files[0]) : null; if (e.target.files[0]?.size > 3.5e6) { toast("PDF must be under 3.5 MB", true); pdf = null; e.target.value = ""; } };
   $("#checkBtn").onclick = e => busy(e.currentTarget, async () => {
     const body = { title: $("#fTitle").value, channel: $("#fChannel").value, text: $("#fText").value, image_b64: image, alt_text: $("#fAlt").value, pdf_b64: pdf, brand_id: S.brandId };
     if (!body.text.trim() && !image && !pdf) throw new Error("Add some text, an image or a PDF first.");
-    const d = await api("POST", "/api/drafts", body);
-    await api("POST", `/api/drafts/${d.id}/check`); location.hash = "#/d/" + d.id;
-  }, "Checking… (AI review takes ~10–20 s)");
+    await withChecking(async () => {
+      const d = await api("POST", "/api/drafts", body);
+      await api("POST", `/api/drafts/${d.id}/check`); location.hash = "#/d/" + d.id;
+    });
+  }, "Checking…");
 }
 function fileB64(file) { return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(file); }); }
 async function shrinkImage(file) {
@@ -262,12 +306,12 @@ function renderDraft(d) {
   const ha = $("#headActions");
   if (editable) {
     ha.innerHTML = `<button id="recheckBtn">Re-run check</button><button class="btn-primary" id="submitBtn" ${!check || open ? "disabled" : ""} title="${!check ? "Run a check first" : open ? `Decide on ${open} open issue(s) first` : ""}">Submit for review</button>`;
-    $("#recheckBtn").onclick = e => busy(e.currentTarget, async () => renderDraft(await api("POST", `/api/drafts/${draft.id}/check`)), "Checking…");
-    $("#submitBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/submit`)); refreshQueueCount(); toast("Submitted for review. Switch role to Manager to review it."); }, "Submitting…");
+    $("#recheckBtn").onclick = e => busy(e.currentTarget, () => withChecking(async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/check`)); enter(); }), "Checking…");
+    $("#submitBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/submit`)); enter(); refreshQueueCount(); toast("Submitted for review. Switch role to Manager to review it."); }, "Submitting…");
   } else if (draft.status === "in_review" && reviewer) {
     ha.innerHTML = `<input id="reviewComment" placeholder="Comment (required to send back)" style="width:260px"><button id="sendBackBtn">Send back</button><button class="btn-good" id="approveBtn">Approve</button>`;
-    $("#approveBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/review`, { action: "approve", comment: $("#reviewComment").value })); refreshQueueCount(); toast("Approved"); }, "Approving…");
-    $("#sendBackBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/review`, { action: "request_changes", comment: $("#reviewComment").value })); refreshQueueCount(); toast("Sent back to the creator"); }, "Sending…");
+    $("#approveBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/review`, { action: "approve", comment: $("#reviewComment").value })); enter(); refreshQueueCount(); toast("Approved"); }, "Approving…");
+    $("#sendBackBtn").onclick = e => busy(e.currentTarget, async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/review`, { action: "request_changes", comment: $("#reviewComment").value })); enter(); refreshQueueCount(); toast("Sent back to the creator"); }, "Sending…");
   }
   if (editable && $("#editBtn")) $("#editBtn").onclick = () => editMode(draft, cur);
   $("#commentBtn").onclick = e => { const c = $("#commentIn").value.trim(); if (!c) return; busy(e.currentTarget, async () => renderDraft(await api("POST", `/api/drafts/${draft.id}/comment`, { comment: c }))); };
@@ -338,9 +382,14 @@ function findingCard(f, n, editable) {
 function bindFindings(d, editable) {
   const byId = Object.fromEntries(d.findings.map(f => [f.id, f]));
   app.querySelectorAll("mark.hl").forEach(m => m.onclick = () => focusFinding(m.dataset.f));
-  if ($("#firstCheck")) $("#firstCheck").onclick = e => busy(e.currentTarget, async () => renderDraft(await api("POST", `/api/drafts/${d.draft.id}/check`)), "Checking…");
+  if ($("#firstCheck")) $("#firstCheck").onclick = e => busy(e.currentTarget, () => withChecking(async () => { renderDraft(await api("POST", `/api/drafts/${d.draft.id}/check`)); enter(); }), "Checking…");
   if (!editable) return;
-  const decide = async (id, body) => { await api("POST", `/api/findings/${id}/decision`, body); renderDraft(await api("GET", `/api/drafts/${d.draft.id}`)); setTimeout(() => focusNext(), 50); };
+  const decide = async (id, body) => {
+    await api("POST", `/api/findings/${id}/decision`, body);
+    const y = window.scrollY; renderDraft(await api("GET", `/api/drafts/${d.draft.id}`)); window.scrollTo(0, y);
+    const card = $("#f-" + id); if (card && body.decision && !REDUCED) card.classList.add("just-decided");
+    setTimeout(() => focusNext(), 450);
+  };
   app.querySelectorAll("[data-accept]").forEach(b => b.onclick = () => busy(b, () => decide(b.dataset.accept, { decision: "accepted" }), "Saving…"));
   app.querySelectorAll("[data-ack]").forEach(b => b.onclick = () => busy(b, () => decide(b.dataset.ack, { decision: "accepted" }), "Saving…"));
   app.querySelectorAll("[data-undo]").forEach(b => b.onclick = () => busy(b, () => decide(b.dataset.undo, { decision: null }), "…"));
@@ -373,7 +422,7 @@ function editMode(draft, cur) {
     <div class="row"><button class="btn-primary" id="saveEdit">Save and re-check</button><button id="cancelEdit">Cancel</button></div>`;
   $("#editText").focus();
   $("#cancelEdit").onclick = () => draftView(draft.id);
-  $("#saveEdit").onclick = e => busy(e.currentTarget, async () => renderDraft(await api("POST", `/api/drafts/${draft.id}/versions`, { text: $("#editText").value, alt_text: $("#editAlt") ? $("#editAlt").value : null })), "Saving and checking…");
+  $("#saveEdit").onclick = e => busy(e.currentTarget, () => withChecking(async () => { renderDraft(await api("POST", `/api/drafts/${draft.id}/versions`, { text: $("#editText").value, alt_text: $("#editAlt") ? $("#editAlt").value : null })); enter(); }), "Saving and checking…");
 }
 function wordDiff(a, b) {
   const A = a.split(/(\s+)/), B = b.split(/(\s+)/);
@@ -501,7 +550,7 @@ async function evaluation() {
     prog.innerHTML = "";
     const summary = { cases: results };
     await api("POST", "/api/eval/runs", { results: summary });
-    $("#evalOut").innerHTML = evalReport(summary, new Date().toISOString());
+    $("#evalOut").innerHTML = evalReport(summary, new Date().toISOString()); enter($("#evalOut"));
   }, "Running…");
 }
 function evalReport(res, at) {
