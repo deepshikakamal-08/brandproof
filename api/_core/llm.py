@@ -128,16 +128,24 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
     }
     if name == "sarvam":
         body["reasoning_effort"] = os.getenv("SARVAM_REASONING", "none")
-    key = os.getenv(p["key"])
-    for attempt in range(2):
+    key = os.getenv(p["key"], "").strip()
+    # Some providers reject JSON-schema output: fall back to JSON mode, then to plain prompting.
+    formats = [body["response_format"], {"type": "json_object"}, None]
+    last = ""
+    for fmt in formats:
+        if fmt is None:
+            body.pop("response_format", None)
+        else:
+            body["response_format"] = fmt
         r = httpx.post(p["url"], headers=_headers(name, key), json=body, timeout=timeout)
-        if r.status_code == 400 and attempt == 0 and "response_format" in r.text:
-            body["response_format"] = {"type": "json_object"}  # provider without JSON-schema support
+        if r.status_code in (400, 422):
+            last = f"{r.status_code} {r.text[:300]}"
             continue
-        r.raise_for_status()
+        if r.status_code >= 400:
+            raise AIError(f"{r.status_code} {r.text[:300]}")
         msg = r.json()["choices"][0]["message"]
-        return _extract_json(msg.get("content"))
-    raise AIError("bad request")
+        return _extract_json(msg.get("content") or msg.get("reasoning_content"))
+    raise AIError(last or "request rejected")
 
 
 def chat_json(system, user, schema, schema_name="result", vision_image=None):
@@ -164,7 +172,7 @@ def chat_json(system, user, schema, schema_name="result", vision_image=None):
 
 def embed(texts):
     """Gemini embeddings via OpenAI-compatible API. Returns list of vectors or None."""
-    key = os.getenv("GEMINI_API_KEY")
+    key = os.getenv("GEMINI_API_KEY", "").strip()
     if not key or not texts:
         return None
     try:
@@ -200,3 +208,27 @@ def _mock(user, schema_name, image):
         claims.append({"quote": m.group(0), "status": "outdated", "cited_id": "F2",
                        "explanation": "Mock: expired price.", "fix_text": "₹649"})
     return {"issues": issues, "claims": claims}
+
+
+def probe():
+    """Send one tiny request to every configured provider and report the result (no secrets)."""
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
+    out = {}
+    for name, p in PROVIDERS.items():
+        if not (p["url"] and os.getenv(p["key"])):
+            continue
+        t0 = time.time()
+        try:
+            data = _call(name, p, "Reply with JSON only.", 'Return {"ok": true}.', schema, "probe", None, 30)
+            out[name] = {"model": p["model"], "ok": True, "seconds": round(time.time() - t0, 1), "reply": data}
+        except Exception as e:
+            out[name] = {"model": p["model"], "ok": False, "seconds": round(time.time() - t0, 1),
+                         "error": f"{type(e).__name__}: {str(e)[:400]}"}
+    key = os.getenv("GEMINI_API_KEY", "")
+    out["key_check"] = {k: ("set" if os.getenv(k) else "missing") + (" (has spaces/newline!)" if os.getenv(k, "").strip() != os.getenv(k, "") else "")
+                        for k in ("SARVAM_API_KEY", "GEMINI_API_KEY")}
+    if key:
+        t0 = time.time()
+        v = embed(["test"])
+        out["embeddings"] = {"ok": bool(v), "seconds": round(time.time() - t0, 1)}
+    return out

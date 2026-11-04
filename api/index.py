@@ -46,8 +46,11 @@ class DemoIn(BaseModel):
 
 
 @app.get("/api/health")
-def health():
-    return {"ok": True, "db": "postgres" if db.IS_PG else "sqlite", **llm.status()}
+def health(probe: int = 0):
+    out = {"ok": True, "db": "postgres" if db.IS_PG else "sqlite", **llm.status()}
+    if probe:
+        out["probe"] = llm.probe()
+    return out
 
 
 @app.post("/api/session/demo")
