@@ -321,7 +321,12 @@ function actionText(a) {
   return { created: "created the draft", checked: "ran a check", submitted: "submitted for review", approved: "approved", changes_requested: "requested changes", edited: "edited the text", commented: "commented" }[a] || a;
 }
 function docHtml(text, findings, readOnly) {
-  const spans = findings.map((f, i) => ({ ...f, i: i + 1 })).filter(f => f.start_idx != null && f.end_idx != null).sort((a, b) => a.start_idx - b.start_idx || b.end_idx - a.end_idx);
+  // Show the most specific highlights: shorter spans win where findings overlap; the rest stay in the list.
+  const all = findings.map((f, i) => ({ ...f, i: i + 1 })).filter(f => f.start_idx != null && f.end_idx != null)
+    .sort((a, b) => (a.end_idx - a.start_idx) - (b.end_idx - b.start_idx));
+  const chosen = [];
+  for (const f of all) if (!chosen.some(c => f.start_idx < c.end_idx && c.start_idx < f.end_idx)) chosen.push(f);
+  const spans = chosen.sort((a, b) => a.start_idx - b.start_idx);
   // Server offsets count Unicode code points (Python); JS strings count UTF-16 units, so slice by code point.
   const cp = Array.from(text);
   const sl = (a, b) => cp.slice(a, b).join("");

@@ -290,6 +290,8 @@ def _gate(text, it, ids, existing, kind):
             return None  # an exact rule already covers this
     fix = it.get("fix_text") or None
     fix = _fix_ok(text, s, e, fix) if fix else None
+    if fix and (e - s) > 40 and any(_overlaps(ex, cand) for ex in existing):
+        fix = None  # a long rewrite would clash with smaller fixes inside it; keep the finding as advice
     sev = it.get("severity") or ("high" if kind == "claim" else "medium")
     if kind == "claim":
         sev = "high" if it["status"] in ("contradicted", "outdated") else "medium"
