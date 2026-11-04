@@ -21,7 +21,7 @@ PROVIDERS = {
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "key": "GEMINI_API_KEY",
-        "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
     },
     "openai_compat": {
         "url": os.getenv("OPENAI_COMPAT_URL", ""),
@@ -46,7 +46,9 @@ def vision_provider():
     name = os.getenv("VISION_PROVIDER", "gemini")
     p = PROVIDERS.get(name)
     if p and os.getenv(p["key"]):
-        model = os.getenv("VISION_MODEL", p["model"])
+        model = os.getenv("VISION_MODEL", "").strip()
+        if not model or model.upper() == "VISION_MODEL":  # guard against a mis-pasted setting
+            model = p["model"]
         return name, {**p, "model": model}
     return None, None
 
@@ -127,7 +129,8 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
                             "json_schema": {"name": schema_name, "schema": schema, "strict": False}},
     }
     if name == "sarvam":
-        body["reasoning_effort"] = os.getenv("SARVAM_REASONING", "none")
+        effort = os.getenv("SARVAM_REASONING", "low").strip().lower()
+        body["reasoning_effort"] = effort if effort in ("low", "medium", "high") else "low"
     key = os.getenv(p["key"], "").strip()
     # Some providers reject JSON-schema output: fall back to JSON mode, then to plain prompting.
     formats = [body["response_format"], {"type": "json_object"}, None]
@@ -138,6 +141,9 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
         else:
             body["response_format"] = fmt
         r = httpx.post(p["url"], headers=_headers(name, key), json=body, timeout=timeout)
+        if r.status_code in (429, 503):  # busy or rate-limited: one short retry
+            time.sleep(2)
+            r = httpx.post(p["url"], headers=_headers(name, key), json=body, timeout=timeout)
         if r.status_code in (400, 422):
             last = f"{r.status_code} {r.text[:300]}"
             continue
