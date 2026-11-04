@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brandproof · Brand governance before publication</title>
+  <meta name="description" content="Brandproof checks content against your approved brand guidelines, facts and assets before it is published, explains every issue with a citation, and keeps a human in charge of approval.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23243B8F'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar" id="topbar" hidden>
+    <a class="logo" href="#/new"><span class="logo-mark">✓</span> Brandproof</a>
+    <nav class="nav" id="nav">
+      <a href="#/new" data-nav="new">New check</a>
+      <a href="#/drafts" data-nav="drafts">Drafts</a>
+      <a href="#/queue" data-nav="queue">Review queue <span class="count" id="queueCount"></span></a>
+      <a href="#/rulebook" data-nav="rulebook">Rulebook</a>
+      <a href="#/insights" data-nav="insights">Insights</a>
+      <a href="#/eval" data-nav="eval">Evaluation</a>
+      <a href="#/how" data-nav="how">How it works</a>
+    </nav>
+    <div class="top-right">
+      <select id="brandSelect" class="brand-select" title="Brand"></select>
+      <label class="role">
+        <span>Role</span>
+        <select id="roleSelect">
+          <option value="creator">Creator</option>
+          <option value="manager">Manager</option>
+          <option value="reviewer">Reviewer</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <button class="icon-btn" id="menuBtn" aria-label="Menu">☰</button>
+    </div>
+  </header>
+  <div class="demo-banner" id="demoBanner" hidden>
+    Demo workspace with the fictional brand <b>Neem &amp; Nila Skincare</b>. Switch <b>Role</b> (top right) to act as creator, manager or reviewer.
+    <span id="aiChip" class="ai-chip"></span>
+  </div>
+  <main id="app" class="app"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
