@@ -231,7 +231,7 @@ def run_check(org_id, brand, version, channel, use_cache=True):
 
     findings.sort(key=lambda f: (SEV.get(f["severity"], 3), f["start"] if f["start"] is not None else 10 ** 6))
     payload = {
-        "findings": findings, "model": model or (status["text_model"] if ai_status != "not_configured" else None),
+        "findings": findings, "model": model if ai_status in ("ok", "partial") else None,
         "ai_status": ai_status, "dropped_uncited": dropped, "verified_claims": verified,
         "duration_ms": int((time.time() - t0) * 1000), "content_hash": key, "cached": False,
         "retrieved": [c["code"] for c in picked],

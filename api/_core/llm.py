@@ -9,7 +9,8 @@ import os
 import re
 import time
 
-TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60"))
+TIMEOUT = float(os.getenv("LLM_TIMEOUT", "35"))
+FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "40"))
 
 PROVIDERS = {
     "sarvam": {
@@ -101,17 +102,18 @@ def _extract_json(s):
         raise
 
 
-def chat_json(system, user, schema, schema_name="result", vision_image=None):
-    """Returns (parsed_json, model_label). Raises AIError on failure."""
-    if MOCK:
-        return _mock(user, schema_name, vision_image), "mock:offline-test"
-    if vision_image:
-        name, p = vision_provider()
-    else:
-        name, p = text_provider()
-    if not name:
-        raise AIError("No AI provider is configured")
-    key = os.getenv(p["key"])
+def _candidates(vision):
+    """Primary provider first, then any other configured provider as a fallback."""
+    first = vision_provider() if vision else text_provider()
+    out = [first] if first[0] else []
+    for name, p in PROVIDERS.items():
+        if p["url"] and os.getenv(p["key"]) and name != first[0]:
+            out.append((name, p))
+    return out
+
+
+def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
+    import httpx
     content = redact(user)
     if vision_image:
         content = [{"type": "text", "text": content},
@@ -120,27 +122,44 @@ def chat_json(system, user, schema, schema_name="result", vision_image=None):
         "model": p["model"],
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
         "temperature": 0,
-        "max_tokens": 6000,
+        "max_tokens": 4000,
         "response_format": {"type": "json_schema",
                             "json_schema": {"name": schema_name, "schema": schema, "strict": False}},
     }
     if name == "sarvam":
-        body["reasoning_effort"] = os.getenv("SARVAM_REASONING", "low")
-    import httpx
-    last = None
+        body["reasoning_effort"] = os.getenv("SARVAM_REASONING", "none")
+    key = os.getenv(p["key"])
     for attempt in range(2):
+        r = httpx.post(p["url"], headers=_headers(name, key), json=body, timeout=timeout)
+        if r.status_code == 400 and attempt == 0 and "response_format" in r.text:
+            body["response_format"] = {"type": "json_object"}  # provider without JSON-schema support
+            continue
+        r.raise_for_status()
+        msg = r.json()["choices"][0]["message"]
+        return _extract_json(msg.get("content"))
+    raise AIError("bad request")
+
+
+def chat_json(system, user, schema, schema_name="result", vision_image=None):
+    """Returns (parsed_json, model_label). Tries the primary provider within a
+    time budget, then falls back to the next configured provider."""
+    if MOCK:
+        return _mock(user, schema_name, vision_image), "mock:offline-test"
+    cands = _candidates(bool(vision_image))
+    if not cands:
+        raise AIError("No AI provider is configured")
+    errors = []
+    for i, (name, p) in enumerate(cands[:2]):
+        t0 = time.time()
         try:
-            r = httpx.post(p["url"], headers=_headers(name, key), json=body, timeout=TIMEOUT)
-            if r.status_code == 400 and attempt == 0 and "response_format" in r.text:
-                body["response_format"] = {"type": "json_object"}
-                continue
-            r.raise_for_status()
-            msg = r.json()["choices"][0]["message"]
-            return _extract_json(msg.get("content")), f"{name}:{p['model']}"
-        except Exception as e:  # network, rate limit, bad JSON
-            last = e
-            time.sleep(1.5)
-    raise AIError(f"{name} failed: {str(last)[:200]}")
+            data = _call(name, p, system, user, schema, schema_name, vision_image,
+                         TIMEOUT if i == 0 else FALLBACK_TIMEOUT)
+            print(f"[ai] {schema_name} {name}:{p['model']} ok in {time.time() - t0:.1f}s", flush=True)
+            return data, f"{name}:{p['model']}"
+        except Exception as e:  # timeout, rate limit, bad JSON: try the next provider
+            print(f"[ai] {schema_name} {name}:{p['model']} failed after {time.time() - t0:.1f}s: {str(e)[:160]}", flush=True)
+            errors.append(f"{name}: {str(e)[:120]}")
+    raise AIError("; ".join(errors))
 
 
 def embed(texts):
