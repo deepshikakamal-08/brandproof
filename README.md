@@ -103,21 +103,7 @@ SERVE_STATIC=1 LLM_PROVIDER=mock python -m uvicorn index:app --port 8000
 python ../tests/test_engine.py          # offline tests, no API keys needed
 ```
 
-## Changes from the Round 1 plan
-
-- Frontend in plain HTML/CSS/JavaScript instead of React: no build step, faster first load, nothing to break at deploy time.
-- Everything on Vercel (instead of Vercel + Render): one link, no cold-start sleep of a separate backend.
-- Sarvam `sarvam-105b` for text checks instead of Gemini; Gemini kept for vision and embeddings.
-- Hosted models instead of local models (Vercel functions can't run local LLMs); the separate NLI model is replaced by fact-grounded LLM claim checks plus the citation gate.
-- Guest demo workspaces with signed sessions instead of full sign-up, so judges can start instantly; each guest still gets an isolated organisation.
-- Retrieval uses BM25 + embeddings rank fusion in Python instead of pgvector (rulebooks are small; no extension needed).
-- Added: public check API, PDF guideline import, evaluation page.
-
-## Round 3: three improvements
-
-1. **Learning from reviewer decisions to cut false flags.** Accept/dispute history per clause tunes severity and confidence thresholds and adds few-shot examples to the prompt. Target: false alarms ≤ 10% on the same test set.
-2. **Indian-language and code-mixed review** (Tamil, Hindi, Tanglish/Hinglish) using Sarvam's Indian-language strength, with a 20-draft labelled test set.
-3. **Guideline-gap assistant.** Clauses that are disputed often get a suggested clearer rewrite with do/don't examples for the admin to approve, with rulebook versioning.
+.
 
 ## License
 
