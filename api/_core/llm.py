@@ -9,14 +9,22 @@ import os
 import re
 import time
 
-TIMEOUT = float(os.getenv("LLM_TIMEOUT", "35"))
-FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "40"))
+TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))           # primary provider
+FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "30"))
+BUDGET = float(os.getenv("LLM_BUDGET", "90"))             # whole call, all providers
+FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "openai_compat"]
+VISION_ORDER = ["gemini", "sarvam_flash", "openai_compat"]
 
 PROVIDERS = {
     "sarvam": {
         "url": "https://api.sarvam.ai/v1/chat/completions",
         "key": "SARVAM_API_KEY",
         "model": os.getenv("SARVAM_MODEL", "sarvam-105b"),
+    },
+    "sarvam_flash": {
+        "url": "https://api.sarvam.ai/v2/chat/completions",
+        "key": "SARVAM_API_KEY",
+        "model": os.getenv("SARVAM_FLASH_MODEL", "glm5.3-flash"),
     },
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
@@ -105,10 +113,11 @@ def _extract_json(s):
 
 
 def _candidates(vision):
-    """Primary provider first, then any other configured provider as a fallback."""
+    """Primary provider first, then the other configured providers as fallbacks."""
     first = vision_provider() if vision else text_provider()
     out = [first] if first[0] else []
-    for name, p in PROVIDERS.items():
+    for name in (VISION_ORDER if vision else FALLBACK_ORDER):
+        p = PROVIDERS[name]
         if p["url"] and os.getenv(p["key"]) and name != first[0]:
             out.append((name, p))
     return out
@@ -124,11 +133,11 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
         "model": p["model"],
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
         "temperature": 0,
-        "max_tokens": 4000,
+        "max_tokens": 3000,
         "response_format": {"type": "json_schema",
                             "json_schema": {"name": schema_name, "schema": schema, "strict": False}},
     }
-    if name == "sarvam":
+    if name in ("sarvam", "sarvam_flash"):
         effort = os.getenv("SARVAM_REASONING", "low").strip().lower()
         body["reasoning_effort"] = effort if effort in ("low", "medium", "high") else "low"
     key = os.getenv(p["key"], "").strip()
@@ -155,25 +164,28 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
 
 
 def chat_json(system, user, schema, schema_name="result", vision_image=None):
-    """Returns (parsed_json, model_label). Tries the primary provider within a
-    time budget, then falls back to the next configured provider."""
+    """Returns (parsed_json, model_label). Tries providers in order within one time budget."""
     if MOCK:
         return _mock(user, schema_name, vision_image), "mock:offline-test"
     cands = _candidates(bool(vision_image))
     if not cands:
         raise AIError("No AI provider is configured")
+    deadline = time.time() + BUDGET
     errors = []
-    for i, (name, p) in enumerate(cands[:2]):
+    for i, (name, p) in enumerate(cands[:3]):
+        left = deadline - time.time()
+        if left < 8:
+            break
         t0 = time.time()
         try:
             data = _call(name, p, system, user, schema, schema_name, vision_image,
-                         TIMEOUT if i == 0 else FALLBACK_TIMEOUT)
+                         min(TIMEOUT if i == 0 else FALLBACK_TIMEOUT, left - 2))
             print(f"[ai] {schema_name} {name}:{p['model']} ok in {time.time() - t0:.1f}s", flush=True)
             return data, f"{name}:{p['model']}"
-        except Exception as e:  # timeout, rate limit, bad JSON: try the next provider
+        except Exception as e:  # timeout, busy, bad JSON: try the next provider
             print(f"[ai] {schema_name} {name}:{p['model']} failed after {time.time() - t0:.1f}s: {str(e)[:160]}", flush=True)
             errors.append(f"{name}: {str(e)[:120]}")
-    raise AIError("; ".join(errors))
+    raise AIError("; ".join(errors) or "out of time")
 
 
 def embed(texts):

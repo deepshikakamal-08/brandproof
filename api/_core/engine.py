@@ -18,7 +18,7 @@ from .rules import run_exact
 
 SEV = {"high": 0, "medium": 1, "low": 2}
 
-AI_SCHEMA = {
+_AI_FULL = {
     "type": "object",
     "properties": {
         "issues": {"type": "array", "items": {"type": "object", "properties": {
@@ -40,6 +40,9 @@ AI_SCHEMA = {
     },
     "required": ["issues", "claims"],
 }
+
+ISSUES_SCHEMA = {"type": "object", "properties": {"issues": _AI_FULL["properties"]["issues"]}, "required": ["issues"]}
+CLAIMS_SCHEMA = {"type": "object", "properties": {"claims": _AI_FULL["properties"]["claims"]}, "required": ["claims"]}
 
 VISION_SCHEMA = {
     "type": "object",
@@ -64,19 +67,28 @@ SYSTEM = (
 )
 
 
-def _ai_prompt(text, channel, brand, clauses, facts, today):
+def _context(text, channel, brand, clauses, facts, today):
     cl = "\n".join(f"{c['_id']} [{c['code']} {c['title']}] {c['text']}" for c in clauses)
     fa = "\n".join(f"{f['_id']} {f['fkey']}: {f['value']}"
                    + (f" (valid until {f['valid_until']})" if f.get("valid_until") else "") for f in facts)
-    return (
-        f"Brand: {brand['name']}. Voice: {brand['tone_summary']}\nToday's date: {today}\nChannel: {channel}\n\n"
-        f"GUIDELINE CLAUSES\n{cl}\n\nAPPROVED FACTS\n{fa}\n\nDRAFT\n<<<\n{text}\n>>>\n\n"
-        "Return:\n- issues: tone, messaging, legal/disclosure and other guideline breaches, each citing one C id.\n"
-        "- claims: every factual or promotional claim in the draft (price, ingredient, result, certification, offer). "
-        "status = supported if a fact backs it; outdated if it matches an expired fact (cite that F id); "
-        "contradicted if a fact says otherwise (cite that F id); unsupported if no fact backs it (cite C id of the "
-        "claims rule). confidence is 0-1."
-    )
+    return (f"Brand: {brand['name']}. Voice: {brand['tone_summary']}\nToday's date: {today}\nChannel: {channel}\n\n"
+            f"GUIDELINE CLAUSES\n{cl}\n\n" + (f"APPROVED FACTS\n{fa}\n\n" if facts else "") +
+            f"DRAFT\n<<<\n{text}\n>>>\n\n")
+
+
+def _issues_prompt(text, channel, brand, clauses, today):
+    return _context(text, channel, brand, clauses, [], today) + (
+        "Return issues: tone, messaging, pressure tactics, competitor mentions, legal/disclosure (#ad, offer terms) "
+        "and other breaches of the clauses above, each citing one C id. Ignore factual accuracy: another check does "
+        "that. Keep explanations to one sentence. confidence is 0-1.")
+
+
+def _claims_prompt(text, channel, brand, clauses, facts, today):
+    return _context(text, channel, brand, clauses, facts, today) + (
+        "Return claims: every factual or promotional claim in the draft (price, ingredient, percentage, result, "
+        "certification, offer). status = supported if a fact backs it (cite that F id); outdated if it matches an "
+        "expired fact (cite that F id); contradicted if a fact says otherwise (cite that F id); unsupported if no "
+        "fact backs it (cite the C id of the claims rule). Keep explanations to one sentence.")
 
 
 def _locate(text, quote):
@@ -166,11 +178,16 @@ def run_check(org_id, brand, version, channel, use_cache=True):
 
     ai_status, model, dropped, verified = "ok", None, 0, []
     jobs = {}
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    today = date.today().isoformat()
+    claim_clauses = [c for c in picked if (c["code"] or "").startswith("4.")] or picked
+    with ThreadPoolExecutor(max_workers=3) as pool:
         if text.strip() and status["text_model"]:
-            jobs["text"] = pool.submit(llm.chat_json, SYSTEM,
-                                       _ai_prompt(text, channel, brand, picked, fact_list, date.today().isoformat()),
-                                       AI_SCHEMA, "brand_review")
+            # two smaller calls in parallel answer much faster than one large one
+            jobs["issues"] = pool.submit(llm.chat_json, SYSTEM, _issues_prompt(text, channel, brand, picked, today),
+                                         ISSUES_SCHEMA, "brand_issues")
+            jobs["claims"] = pool.submit(llm.chat_json, SYSTEM,
+                                         _claims_prompt(text, channel, brand, claim_clauses, fact_list, today),
+                                         CLAIMS_SCHEMA, "brand_claims")
         if image and visual and status["vision_model"]:
             for i, c in enumerate(visual, 1):
                 c["_id"] = f"V{i}"
@@ -187,29 +204,37 @@ def run_check(org_id, brand, version, channel, use_cache=True):
     if not status["text_model"]:
         ai_status = "not_configured"
 
-    if "text" in results:
-        r = results["text"]
-        if isinstance(r, Exception):
-            ai_status = "failed"
-        else:
-            data, model = r
-            for it in data.get("issues", []):
-                f = _gate(text, it, ids, findings, kind="issue")
-                if f:
-                    findings.append(f)
-                else:
-                    dropped += 1
-            for it in data.get("claims", []):
-                if it.get("status") == "supported":
-                    ref = ids.get(str(it.get("cited_id", "")).strip())
-                    if ref and _locate(text, it.get("quote")):
-                        verified.append({"quote": it["quote"], "cite_code": ref[1]["code"]})
-                    continue
-                f = _gate(text, it, ids, findings, kind="claim")
-                if f:
-                    findings.append(f)
-                else:
-                    dropped += 1
+    text_parts = [k for k in ("issues", "claims") if k in results]
+    failed = [k for k in text_parts if isinstance(results[k], Exception)]
+    if text_parts and len(failed) == len(text_parts):
+        ai_status = "failed"
+    elif failed:
+        ai_status = "partial"
+    models = []
+    if "issues" in results and not isinstance(results["issues"], Exception):
+        data, m = results["issues"]
+        models.append(m)
+        for it in data.get("issues", []):
+            f = _gate(text, it, ids, findings, kind="issue")
+            if f:
+                findings.append(f)
+            else:
+                dropped += 1
+    if "claims" in results and not isinstance(results["claims"], Exception):
+        data, m = results["claims"]
+        models.append(m)
+        for it in data.get("claims", []):
+            if it.get("status") == "supported":
+                ref = ids.get(str(it.get("cited_id", "")).strip())
+                if ref and _locate(text, it.get("quote")):
+                    verified.append({"quote": it["quote"], "cite_code": ref[1]["code"]})
+                continue
+            f = _gate(text, it, ids, findings, kind="claim")
+            if f:
+                findings.append(f)
+            else:
+                dropped += 1
+    model = ", ".join(dict.fromkeys(models)) or None
     if "vision" in results:
         r = results["vision"]
         if isinstance(r, Exception):
