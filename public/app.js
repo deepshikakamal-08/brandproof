@@ -179,7 +179,7 @@ async function newCheck() {
     <div class="panel">
       <h2>Try a sample</h2>
       ${demoBrand ? `<p class="muted small">Real-world drafts written with typical mistakes. Two are compliant, to show what a clean result looks like.</p>
-      <div class="samples">${S.samples.map(s => `<button class="sample" data-sample="${s.id}"><b>${esc(s.title)}${s.has_image ? " 🖼" : ""}</b><span>${esc(s.text)}</span></button>`).join("")}</div>`
+      <div class="samples">${S.samples.map(s => `<button class="sample" data-sample="${s.id}"><b>${esc(s.title.split(" — ")[0])}</b><span>${esc(s.text)}</span><i class="chan">${CHANNEL[s.channel] || s.channel}${s.has_image ? " · image" : ""}</i></button>`).join("")}</div>`
       : `<p class="muted">Samples are written for the Neem &amp; Nila demo brand. Switch brand in the top bar to use them, or check your own content here.</p>`}
     </div>
     <div class="panel">
@@ -187,11 +187,10 @@ async function newCheck() {
       <label class="field"><span>Title</span><input id="fTitle" placeholder="e.g. Diwali serum post"></label>
       <label class="field"><span>Channel</span><select id="fChannel">${Object.entries(CHANNEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
       <label class="field"><span>Text</span><textarea id="fText" placeholder="Paste a caption, email, blog paragraph or press note…"></textarea></label>
-      <label class="field"><span>Image (optional)</span><input id="fImage" type="file" accept="image/png,image/jpeg,image/webp"></label>
+      <label class="field"><span>Image (optional)</span><span class="drop"><input id="fImage" type="file" accept="image/png,image/jpeg,image/webp"><span class="drop-text" data-for="fImage">Click to add a PNG or JPG</span></span></label>
       <div id="imgPrev"></div>
       <label class="field"><span>Alt text for the image</span><input id="fAlt" placeholder="Describe what the image shows"></label>
-      <div class="or">or</div>
-      <label class="field"><span>Upload a PDF (brochure, press note)</span><input id="fPdf" type="file" accept="application/pdf"></label>
+      <label class="field"><span>Or upload a PDF (brochure, press note)</span><span class="drop"><input id="fPdf" type="file" accept="application/pdf"><span class="drop-text" data-for="fPdf">Click to add a PDF</span></span></label>
       <button class="btn-primary" id="checkBtn">Check content</button>
     </div>
   </div>`;
@@ -346,47 +345,59 @@ function findingsHtml(draft, check, findings, editable) {
   const s = check.summary || {};
   const decided = findings.filter(f => f.decision).length;
   const high = findings.filter(f => f.severity === "high").length;
+  const aiCount = findings.filter(f => f.source === "ai").length;
   const ai = check.ai_status;
+  const pct = findings.length ? Math.round((decided / findings.length) * 100) : 100;
+  const order = [["high", "High severity"], ["medium", "Medium"], ["low", "Low"]];
+  const numbered = findings.map((f, i) => [f, i + 1]);
+  const disputedFirst = !editable && findings.some(f => f.decision === "disputed");
+  const groups = disputedFirst
+    ? [["Disputed by the creator", numbered.filter(([f]) => f.decision === "disputed")], ["Other issues", numbered.filter(([f]) => f.decision !== "disputed")]]
+    : order.map(([k, label]) => [label, numbered.filter(([f]) => f.severity === k)]);
   return `
-    <div class="row"><h2 style="margin:0">Issues</h2><span class="spacer"></span><span class="muted small">${s.cached ? "cached result · " : ""}${(check.duration_ms / 1000).toFixed(1)} s</span></div>
-    <div class="summary" style="margin-top:.6rem">
-      <div class="kpi"><b>${findings.length}</b><span>issues</span></div>
-      <div class="kpi"><b class="${high ? "bad" : ""}">${high}</b><span>high severity</span></div>
-      <div class="kpi"><b>${decided}/${findings.length}</b><span>decided</span></div>
-      <div class="kpi"><b>${check.dropped_uncited}</b><span>uncited AI flags discarded</span></div>
+    <div class="iss-head">
+      <h2>Issues</h2>
+      <span class="muted small">${s.cached ? "saved result · " : ""}${(check.duration_ms / 1000).toFixed(1)} s</span>
     </div>
-    ${ai === "failed" ? `<div class="warn">AI review was unavailable for this run, so only rule-based checks are shown. Use <b>Re-run check</b> to try again.</div>` : ""}
-    ${ai === "not_configured" ? `<div class="warn">AI checks are not configured on this server; showing rule-based checks only.</div>` : ""}
-    ${check.model ? `<div class="ai-note">AI-assisted review by <b>${esc(check.model)}</b>. AI findings are labelled “AI” and every one cites a clause or fact; uncited suggestions are discarded automatically.</div>` : ""}
-    ${(s.verified_claims || []).length ? `<p class="verified">✓ Verified against the fact sheet: ${s.verified_claims.map(v => `“${esc(v.quote)}” (${esc(v.cite_code)})`).join(", ")}</p>` : ""}
+    <div class="statline">
+      <span><b>${findings.length}</b> issues</span>
+      <span class="${high ? "bad" : ""}"><b>${high}</b> high</span>
+      <span><b>${aiCount}</b> by AI</span>
+      <span title="AI suggestions that did not cite a real guideline clause or fact, or quoted text not in the draft, are thrown away"><b>${check.dropped_uncited}</b> uncited AI flags blocked</span>
+    </div>
+    ${findings.length ? `<div class="decide-bar"><div class="track"><div style="width:${pct}%"></div></div><span class="small"><b>${decided}/${findings.length}</b> decided</span>
+      ${editable ? `<button class="btn-sm" id="acceptAll" ${decided === findings.length ? "disabled" : ""}>Accept all fixes</button>` : ""}</div>` : ""}
+    ${ai === "failed" ? `<div class="warn small">AI review didn't respond this time, so only rule-based checks are shown. <b>Re-run check</b> to try again.</div>` : ""}
+    ${ai === "not_configured" ? `<div class="warn small">AI checks aren't configured; showing rule-based checks only.</div>` : ""}
+    ${check.model ? `<div class="ai-note small"><span class="ai-dot"></span>AI-assisted by <b>${esc(check.model.replace("sarvam_flash:", "Sarvam ").replace("sarvam:", "Sarvam ").replace("gemini:", "Gemini "))}</b> · every AI finding cites a clause or fact</div>` : ""}
+    ${(s.verified_claims || []).length ? `<p class="verified small">✓ Verified against the fact sheet: ${s.verified_claims.map(v => `“${esc(v.quote)}” (${esc(v.cite_code)})`).join(", ")}</p>` : ""}
     ${!findings.length ? `<div class="okbox">No issues found. This content follows the rulebook.</div>` : ""}
-    ${editable && findings.length ? `<div class="row small" style="margin:.2rem 0 .6rem"><span class="muted">Decide on every issue, then submit.</span><span class="spacer"></span><button class="btn-sm" id="acceptAll" ${decided === findings.length ? "disabled" : ""}>Accept all remaining fixes</button></div>` : ""}
-    ${!editable && findings.some(f => f.decision === "disputed") ? `<div class="warn"><b>${findings.filter(f => f.decision === "disputed").length} disputed by the creator</b>, shown first. Read the notes before approving.${findings.some(f => f.decision === "disputed" && f.severity === "high" && ["claims", "legal"].includes(f.category)) ? " A high-severity claim was disputed: a manager must add a comment to approve, or a Reviewer can approve directly." : ""}</div>` : ""}
-    <div id="flist">${findings.map((f, i) => [f, i + 1]).sort((a, b) => editable ? 0 : (b[0].decision === "disputed") - (a[0].decision === "disputed")).map(([f, n]) => findingCard(f, n, editable)).join("")}</div>`;
+    ${disputedFirst && findings.some(f => f.decision === "disputed" && f.severity === "high" && ["claims", "legal"].includes(f.category)) ? `<div class="warn small">A high-severity claim was disputed: a manager must add a comment to approve, or a Reviewer can approve directly.</div>` : ""}
+    <div id="flist" class="flist">${groups.filter(([, g]) => g.length).map(([label, g]) => `<div class="group-label">${label} <span>${g.length}</span></div>${g.map(([f, n]) => findingCard(f, n, editable)).join("")}`).join("")}</div>`;
 }
 function findingCard(f, n, editable) {
   const quoteable = f.quote && f.quote !== "*" && f.quote !== "[image]";
   const fixShown = f.decision === "edited" ? f.edited_fix : f.fix_text;
-  return `<div class="finding ${f.decision ? "decided" : ""}" id="f-${f.id}">
-    <div class="head"><span class="num">#${n}</span><span class="pill ${f.severity}">${f.severity[0].toUpperCase() + f.severity.slice(1)}</span>
-      <span class="pill cat">${CAT[f.category] || f.category}</span>
-      ${f.claim_status ? `<span class="pill claim">Claim: ${CLAIM[f.claim_status] || f.claim_status}</span>` : ""}
-      ${f.source === "ai" ? `<span class="pill ai" title="Found by AI; confidence ${Math.round(f.confidence * 100)}%">AI · ${Math.round(f.confidence * 100)}%</span>` : `<span class="pill rule" title="Found by an exact rule">Rule</span>`}
-    </div>
-    ${quoteable ? `<div class="quote">“${esc(f.quote)}”</div>` : f.quote === "[image]" ? `<div class="quote">In the image</div>` : ""}
-    <p class="small">${esc(f.explanation)}</p>
-    <div class="cite ${f.cite_type === "fact" ? "fact" : ""}"><b>${f.cite_type === "fact" ? "Approved fact " + esc(f.cite_code) : "Guideline " + esc(f.cite_code)}</b> · ${esc(f.cite_text)}</div>
-    ${fixShown != null && quoteable ? `<div class="fix">Suggested fix: <span class="diff-del">${esc(f.quote)}</span> → ${fixShown === "" ? '<span class="muted">(remove)</span>' : `<span class="diff-ins">${esc(fixShown)}</span>`}</div>` : ""}
-    ${f.decision ? `<div class="actions"><span class="decision ${f.decision}">${{ accepted: "✓ Fix accepted", edited: "✓ Edited", disputed: "⚑ Disputed" }[f.decision]}</span>${f.decision_note ? `<span class="small muted">“${esc(f.decision_note)}”</span>` : ""}<span class="small muted">by ${esc(f.decided_by)}</span>${editable ? `<button class="btn-ghost btn-sm" data-undo="${f.id}">Undo</button>` : ""}</div>`
-    : editable ? `<div class="actions">
-        ${fixShown != null && quoteable ? `<button class="btn-sm btn-good" data-accept="${f.id}">Accept fix</button>` : `<button class="btn-sm btn-good" data-ack="${f.id}">Mark resolved</button>`}
+  const src = f.cite_type === "fact" ? "Fact " + esc(f.cite_code) : "Guideline " + esc(f.cite_code);
+  return `<div class="finding sev-${f.severity} ${f.decision ? "decided" : ""}" id="f-${f.id}">
+    <div class="f-top"><span class="num">${n}</span>
+      <span class="f-quote">${quoteable ? `“${esc(f.quote)}”` : f.quote === "[image]" ? "In the image" : "Whole draft"}</span>
+      <span class="f-tags"><span class="tag">${CAT[f.category] || f.category}</span>${f.claim_status ? `<span class="tag claim">${CLAIM[f.claim_status] || f.claim_status}</span>` : ""}${f.source === "ai" ? `<span class="tag ai" title="Found by AI; confidence ${Math.round(f.confidence * 100)}%">AI ${Math.round(f.confidence * 100)}%</span>` : `<span class="tag rule" title="Found by an exact rule">Rule</span>`}</span></div>
+    <div class="f-why">${esc(f.explanation)}</div>
+    <div class="f-cite ${f.cite_type === "fact" ? "fact" : ""}" data-toggle><b>${src}</b> ${esc(f.cite_text)}</div>
+    ${fixShown != null && quoteable ? `<div class="f-fix"><span class="diff-del">${esc(f.quote)}</span><span class="arrow">→</span>${fixShown === "" ? '<span class="muted">remove</span>' : `<span class="diff-ins">${esc(fixShown)}</span>`}</div>` : ""}
+    ${f.decision ? `<div class="f-actions"><span class="decision ${f.decision}">${{ accepted: "✓ Accepted", edited: "✓ Edited", disputed: "⚑ Disputed" }[f.decision]}</span>${f.decision_note ? `<span class="small muted">“${esc(f.decision_note)}”</span>` : ""}<span class="spacer"></span>${editable ? `<button class="btn-ghost btn-sm" data-undo="${f.id}">Undo</button>` : `<span class="small muted">by ${esc(f.decided_by)}</span>`}</div>`
+    : editable ? `<div class="f-actions"><span class="spacer"></span>
+        <button class="btn-sm" data-dispute="${f.id}">Dispute</button>
         ${quoteable ? `<button class="btn-sm" data-edit="${f.id}">Edit</button>` : ""}
-        <button class="btn-sm" data-dispute="${f.id}">Dispute</button></div><div class="slot"></div>` : `<div class="small muted">Open</div>`}
+        ${fixShown != null && quoteable ? `<button class="btn-sm btn-good" data-accept="${f.id}">Accept fix</button>` : `<button class="btn-sm btn-good" data-ack="${f.id}">Mark resolved</button>`}
+      </div><div class="slot"></div>` : `<div class="f-actions"><span class="small muted">Open</span></div>`}
   </div>`;
 }
 function bindFindings(d, editable) {
   const byId = Object.fromEntries(d.findings.map(f => [f.id, f]));
   app.querySelectorAll("mark.hl").forEach(m => m.onclick = () => focusFinding(m.dataset.f));
+  app.querySelectorAll("[data-toggle]").forEach(c => c.onclick = () => c.classList.toggle("open"));
   if ($("#firstCheck")) $("#firstCheck").onclick = e => busy(e.currentTarget, () => withChecking(async () => { renderDraft(await api("POST", `/api/drafts/${d.draft.id}/check`)); enter(); }), "Checking…");
   if (!editable) return;
   const decide = async (id, body) => {
@@ -462,7 +473,7 @@ async function rulebook() {
     <h2>Import a brand guideline</h2>
     <p class="muted small">Upload any guideline PDF (or paste the text). Brandproof splits it into numbered clauses, classifies each as an exact rule or an AI-judged rule, and extracts banned or required terms. It is added as a new brand for you to review and confirm.</p>
     <label class="field"><span>Brand name</span><input id="impName" placeholder="e.g. Acme Foods"></label>
-    <label class="field"><span>Guideline PDF</span><input id="impPdf" type="file" accept="application/pdf"></label>
+    <label class="field"><span>Guideline PDF</span><span class="drop"><input id="impPdf" type="file" accept="application/pdf"><span class="drop-text" data-for="impPdf">Click to add a guideline PDF</span></span></label>
     <label class="field"><span>…or paste guideline text</span><textarea id="impText" placeholder="1 Voice&#10;1.1 Be friendly and clear.&#10;1.2 Never use more than 2 emoji."></textarea></label>
     <button class="btn-primary" id="impBtn">Import and create rule cards</button>
   </div>
@@ -631,6 +642,10 @@ const ARCH_SVG = `<svg class="arch" viewBox="0 0 760 470" role="img" aria-label=
 <g><rect x="24" y="410" width="344" height="52" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="196" y="432" text-anchor="middle" font-weight="700" fill="#121826">Supabase Postgres</text><text x="196" y="450" text-anchor="middle" font-size="11.5" fill="#4A5468">Per-organisation data, audit log, check cache</text></g>
 <g><rect x="392" y="410" width="344" height="52" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="564" y="432" text-anchor="middle" font-weight="700" fill="#121826">AI gateway</text><text x="564" y="450" text-anchor="middle" font-size="11.5" fill="#4A5468">Redaction, retries · Sarvam (text) · vision · embeddings</text></g>
 </svg>`;
+
+document.addEventListener("change", e => {
+  if (e.target.type === "file") { const t = document.querySelector(`.drop-text[data-for="${e.target.id}"]`); if (t && e.target.files[0]) { t.textContent = "✓ " + e.target.files[0].name; t.parentElement.classList.add("has"); } }
+});
 
 /* ---------------- boot ---------------- */
 S.token = localStorage.getItem("bp_token");
