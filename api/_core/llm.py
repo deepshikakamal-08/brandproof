@@ -14,6 +14,8 @@ FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "30"))
 BUDGET = float(os.getenv("LLM_BUDGET", "90"))             # whole call, all providers
 FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "openai_compat"]
 VISION_ORDER = ["gemini", "sarvam_flash", "openai_compat"]
+DEAD_FOR = 600  # seconds to skip a provider after "no credits" / bad key
+_DEAD = {}
 
 PROVIDERS = {
     "sarvam": {
@@ -40,7 +42,7 @@ PROVIDERS = {
 
 
 def text_provider():
-    name = os.getenv("LLM_PROVIDER", "sarvam")
+    name = os.getenv("LLM_PROVIDER", "sarvam").strip().lower().strip('"')  # tolerate stray spaces or quotes
     p = PROVIDERS.get(name)
     if p and os.getenv(p["key"]):
         return name, p
@@ -51,7 +53,7 @@ def text_provider():
 
 
 def vision_provider():
-    name = os.getenv("VISION_PROVIDER", "gemini")
+    name = os.getenv("VISION_PROVIDER", "gemini").strip().lower().strip('"')
     p = PROVIDERS.get(name)
     if p and os.getenv(p["key"]):
         model = os.getenv("VISION_MODEL", "").strip()
@@ -68,11 +70,13 @@ def status():
     if MOCK:
         return {"text_model": "mock:offline-test", "vision_model": "mock:offline-test", "embeddings": False}
     t, tp = text_provider()
+    setting = os.getenv("LLM_PROVIDER", "")
     v, vp = vision_provider()
     return {
         "text_model": f"{t}:{tp['model']}" if t else None,
         "vision_model": f"{v}:{vp['model']}" if v else None,
         "embeddings": bool(os.getenv("GEMINI_API_KEY")),
+        "llm_provider_setting": repr(setting) if setting else "(not set)",
     }
 
 
@@ -120,7 +124,8 @@ def _candidates(vision):
         p = PROVIDERS[name]
         if p["url"] and os.getenv(p["key"]) and name != first[0]:
             out.append((name, p))
-    return out
+    alive = [c for c in out if _DEAD.get(c[0], 0) < time.time()]
+    return alive or out
 
 
 def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
@@ -156,6 +161,8 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
         if r.status_code in (400, 422):
             last = f"{r.status_code} {r.text[:300]}"
             continue
+        if r.status_code in (401, 402, 403):  # bad key or no credits: skip this provider for a while
+            _DEAD[name] = time.time() + DEAD_FOR
         if r.status_code >= 400:
             raise AIError(f"{r.status_code} {r.text[:300]}")
         msg = r.json()["choices"][0]["message"]
@@ -172,14 +179,16 @@ def chat_json(system, user, schema, schema_name="result", vision_image=None):
         raise AIError("No AI provider is configured")
     deadline = time.time() + BUDGET
     errors = []
+    start = time.time()
     for i, (name, p) in enumerate(cands[:3]):
         left = deadline - time.time()
         if left < 8:
             break
         t0 = time.time()
+        # a fallback gets the full timeout when the earlier providers failed fast (e.g. no credits)
+        limit = TIMEOUT if i == 0 or (t0 - start) < 10 else FALLBACK_TIMEOUT
         try:
-            data = _call(name, p, system, user, schema, schema_name, vision_image,
-                         min(TIMEOUT if i == 0 else FALLBACK_TIMEOUT, left - 2))
+            data = _call(name, p, system, user, schema, schema_name, vision_image, min(limit, left - 2))
             print(f"[ai] {schema_name} {name}:{p['model']} ok in {time.time() - t0:.1f}s", flush=True)
             return data, f"{name}:{p['model']}"
         except Exception as e:  # timeout, busy, bad JSON: try the next provider
