@@ -57,6 +57,7 @@ def run_and_store(org_id, brand, d, user):
                                               "cached": payload.get("cached", False),
                                               "retrieved": payload.get("retrieved", []),
                                               "learning": payload.get("learning"),
+                                              "language": payload.get("language"),
                                               "learning_notes": {str(i): f["learning"] for i, f in
                                                                  enumerate(payload["findings"]) if f.get("learning")},
                                               "hidden": [{k: h.get(k) for k in ("category", "quote", "cite_code",

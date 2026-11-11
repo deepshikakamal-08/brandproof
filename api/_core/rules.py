@@ -8,6 +8,7 @@ import base64
 import io
 import re
 
+from . import lang
 from .demo_data import LEXICON
 
 EMOJI = re.compile("[\U0001F300-\U0001FAFF\U0001F000-\U0001F2FF☀-➿⭐⭕←-⇿]️?")
@@ -267,7 +268,8 @@ def check_palette(image_b64, clause, palette):
                None, rule="palette")]
 
 
-def run_exact(text, channel, image_b64, alt_text, clauses, terms, palette):
+def run_exact(text, channel, image_b64, alt_text, clauses, terms, palette, language=None):
+    language = language or lang.detect(text)
     by_code = {c["code"]: c for c in clauses}
     by_check = {}
     for c in clauses:
@@ -280,8 +282,10 @@ def run_exact(text, channel, image_b64, alt_text, clauses, terms, palette):
         out += check_medical(text, by_check["medical"])
     if "emoji" in by_check:
         out += check_emoji(text, by_check["emoji"], channel)
-    if "readability" in by_check:
+    if "readability" in by_check and not language["indic"]:  # reading-ease formula is for English only
         out += check_readability(text, by_check["readability"], channel)
+    if language["indic"]:
+        out += lang.check_indic(text, by_code, by_check, _f)
     if "caps" in by_check:
         out += check_caps(text, by_check["caps"])
     if "exclamation" in by_check:

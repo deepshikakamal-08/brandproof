@@ -7,7 +7,8 @@ os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ["SQLITE_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
-from _core import engine, evaluation, learning, workspace  # noqa: E402
+from _core import engine, evaluation, lang, learning, workspace  # noqa: E402
+from _core.regional import REGIONAL  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
 
 org, _ = workspace.create_guest_workspace("Test", "creator")
@@ -105,6 +106,32 @@ def test_training_replay_records_calibration():
     pol = learning.policy(org, brand["id"])
     assert pol["calibration_decisions"] == len(r["predicted"]) > 0
     learning.clear(org, brand["id"])
+
+
+def test_language_detection():
+    want = {"Tamil": "ta", "Hindi": "hi", "Tanglish": "ta-en", "Hinglish": "hi-en"}
+    for r in REGIONAL:
+        assert lang.detect(r["text"])["code"] == want[r["lang"]], r["id"]
+    for s in SAMPLES:
+        assert lang.detect(s["text"])["code"] == "en", s["id"]
+
+
+def test_indic_rules_catch_labelled_issues():
+    """Every labelled terminology issue and medical/absolute claim in the Indian-language set is
+    caught by exact rules; compliant drafts get no rule findings."""
+    for r in REGIONAL:
+        found = check(r["text"], r["channel"])["findings"]
+        rules_ = [f for f in found if f["source"] == "rule"]
+        if not r["expected"]:
+            assert not rules_, (r["id"], [f["quote"] for f in rules_])
+        for cat, q in r["expected"]:
+            if cat == "terminology":
+                assert any(q.lower() in f["quote"].lower() for f in rules_), (r["id"], q)
+
+
+def test_brand_name_script_fix():
+    f = check("நீம் அண்ட் நிலா Calm Neem Face Wash", "whatsapp")["findings"]
+    assert any(x["fix_text"] == "Neem & Nila" for x in f)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """Measure accuracy on labelled drafts: precision and recall per category."""
 from . import db, engine, learning
+from .regional import REGIONAL
 from .samples import EVAL_EXTRA, SAMPLES
 from .workspace import asset_b64
 
@@ -7,11 +8,16 @@ CASES = [dict(s) for s in SAMPLES] + [dict(e, title=(e["text"].split("\n")[-1][:
 # Learning experiment: learn from the 12 sample drafts, measure on the 18 drafts it never saw.
 TRAIN_IDS = [s["id"] for s in SAMPLES]
 TEST_IDS = [e["id"] for e in EVAL_EXTRA]
+# Indian-language set (improvement 2): measured separately so the main numbers stay comparable.
+INDIC = [dict(r) for r in REGIONAL]
+CASES = CASES + INDIC
+INDIC_IDS = [r["id"] for r in INDIC]
 
 
 def case_list():
     return [{"id": c["id"], "title": c.get("title", c["id"]), "channel": c["channel"],
-             "expected": len(c["expected"]), "split": "train" if c["id"] in TRAIN_IDS else "test"} for c in CASES]
+             "expected": len(c["expected"]), "split": "train" if c["id"] in TRAIN_IDS else "test",
+             "set": "indic" if c["id"] in INDIC_IDS else "main", "lang": c.get("lang", "English")} for c in CASES]
 
 
 def _spans(text, quote):
@@ -52,7 +58,7 @@ def score_case(org_id, brand, case_id, learn=True, train=False):
             learning.record(org_id, brand["id"], {**p, "id": None}, "accepted" if matched else "disputed",
                             "" if matched else "Labelled as not an issue in the training draft", origin="calibration")
     return {
-        "id": c["id"], "title": c.get("title", c["id"]), "ai_status": res["ai_status"],
+        "id": c["id"], "title": c.get("title", c["id"]), "ai_status": res["ai_status"], "lang": c.get("lang", "English"),
         "tp": sum(1 for e in exp if e["hit"]), "fn": sum(1 for e in exp if not e["hit"]),
         "fp": sum(1 for p in pred_rows if not p["correct"]),
         "missed": [{"category": e["category"], "quote": e["quote"]} for e in exp if not e["hit"]],

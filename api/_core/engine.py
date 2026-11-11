@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from . import db, learning, llm, retrieval
+from . import db, lang, learning, llm, retrieval
 
 try:
     from rapidfuzz import fuzz
@@ -28,13 +28,16 @@ _AI_FULL = {
             "severity": {"type": "string", "enum": ["high", "medium", "low"]},
             "confidence": {"type": "number"},
             "explanation": {"type": "string"},
+            "meaning": {"type": "string"},
             "fix_text": {"type": "string"}},
             "required": ["category", "quote", "cited_id", "severity", "confidence", "explanation", "fix_text"]}},
         "claims": {"type": "array", "items": {"type": "object", "properties": {
             "quote": {"type": "string"},
             "status": {"type": "string", "enum": ["supported", "outdated", "contradicted", "unsupported"]},
             "cited_id": {"type": "string"},
+            "confidence": {"type": "number"},
             "explanation": {"type": "string"},
+            "meaning": {"type": "string"},
             "fix_text": {"type": "string"}},
             "required": ["quote", "status", "cited_id", "explanation", "fix_text"]}},
     },
@@ -80,7 +83,10 @@ def _issues_prompt(text, channel, brand, clauses, today, history=""):
     return _context(text, channel, brand, clauses, [], today, history) + (
         "Return issues: tone, messaging, pressure tactics, competitor mentions, legal/disclosure (#ad, offer terms) "
         "and other breaches of the clauses above, each citing one C id. Ignore factual accuracy: another check does "
-        "that. Keep explanations to one sentence. confidence is 0-1.")
+        "that. Only flag a clear breach a careful brand reviewer would act on, not a matter of taste. Flag a missing "
+        "#ad only if the post mentions a paid partnership, collaboration, gifted product or influencer. Flag missing "
+        "offer terms only if a discount, sale or offer is mentioned without an end date or its conditions. Keep "
+        "explanations to one sentence. confidence is 0-1: how sure you are a reviewer would agree.")
 
 
 def _claims_prompt(text, channel, brand, clauses, facts, today, history=""):
@@ -88,7 +94,10 @@ def _claims_prompt(text, channel, brand, clauses, facts, today, history=""):
         "Return claims: every factual or promotional claim in the draft (price, ingredient, percentage, result, "
         "certification, offer). status = supported if a fact backs it (cite that F id); outdated if it matches an "
         "expired fact (cite that F id); contradicted if a fact says otherwise (cite that F id); unsupported if no "
-        "fact backs it (cite the C id of the claims rule). Keep explanations to one sentence.")
+        "fact backs it (cite the C id of the claims rule). Mark unsupported ONLY specific, checkable claims (a "
+        "number, percentage, result, time frame, certification, comparison, price or offer). Ordinary descriptive "
+        "words (gentle, fresh, everyday, made with neem, lightweight feel) are not claims: leave them out. Keep "
+        "explanations to one sentence. confidence is 0-1: how sure you are a reviewer would agree.")
 
 
 def _locate(text, quote):
@@ -175,7 +184,9 @@ def _raw_check(org_id, brand, version, channel, use_cache, pol):
             payload["cached"] = True
             return payload
 
-    findings = run_exact(text, channel, image, alt, clauses, terms, brand["palette"])
+    language = lang.detect(text)
+    findings = run_exact(text, channel, image, alt, clauses, terms, brand["palette"], language)
+    note = lang.prompt_note(language)
 
     judgement = [c for c in clauses if c["kind"] == "judgement" and not c.get("visual")]
     visual = [c for c in clauses if c.get("visual")]
@@ -197,11 +208,11 @@ def _raw_check(org_id, brand, version, channel, use_cache, pol):
             # two smaller calls in parallel answer much faster than one large one
             jobs["issues"] = pool.submit(llm.chat_json, SYSTEM,
                                          _issues_prompt(text, channel, brand, picked, today,
-                                                        learning.prompt_block(pol, picked)),
+                                                        note + learning.prompt_block(pol, picked)),
                                          ISSUES_SCHEMA, "brand_issues")
             jobs["claims"] = pool.submit(llm.chat_json, SYSTEM,
                                          _claims_prompt(text, channel, brand, claim_clauses, fact_list, today,
-                                                        learning.prompt_block(pol, claim_clauses + fact_list)),
+                                                        note + learning.prompt_block(pol, claim_clauses + fact_list)),
                                          CLAIMS_SCHEMA, "brand_claims")
         if image and visual and status["vision_model"]:
             for i, c in enumerate(visual, 1):
@@ -274,7 +285,7 @@ def _raw_check(org_id, brand, version, channel, use_cache, pol):
         "findings": findings, "model": model if ai_status in ("ok", "partial") else None,
         "ai_status": ai_status, "dropped_uncited": dropped, "verified_claims": verified,
         "duration_ms": int((time.time() - t0) * 1000), "content_hash": key, "cached": False,
-        "retrieved": [c["code"] for c in picked],
+        "retrieved": [c["code"] for c in picked], "language": language,
     }
     if ai_status == "ok":
         db.exec("DELETE FROM check_cache WHERE content_hash = ?", (key,))
@@ -319,9 +330,17 @@ def _gate(text, it, ids, existing, kind):
         "category": category, "severity": sev, "confidence": round(float(it.get("confidence", 0.75)), 2),
         "source": "ai", "rule": "claim" if kind == "claim" else "judgement",
         "quote": text[s:e], "start": s, "end": e, "cite_type": rtype, "cite_code": code, "cite_text": ctext,
-        "explanation": it.get("explanation", ""), "fix_text": fix,
+        "explanation": _with_meaning(it.get("explanation", ""), it.get("meaning"), text[s:e]), "fix_text": fix,
         "claim_status": it.get("status") if kind == "claim" else None,
     }
+
+
+def _with_meaning(expl, meaning, quote):
+    """For Tamil/Hindi quotes, add the English meaning so any reviewer can follow."""
+    m = (meaning or "").strip().strip('"')
+    if not m or not lang.TAMIL.search(quote) and not lang.DEVANAGARI.search(quote) or m.lower() in expl.lower():
+        return expl
+    return f"{expl} (Meaning: “{m}”)"
 
 
 def apply_fixes(text, findings):

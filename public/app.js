@@ -179,7 +179,7 @@ async function newCheck() {
     <div class="panel">
       <h2>Try a sample</h2>
       ${demoBrand ? `<p class="muted small">Real-world drafts written with typical mistakes. Two are compliant, to show what a clean result looks like.</p>
-      <div class="samples">${S.samples.map(s => `<button class="sample" data-sample="${s.id}"><b>${esc(s.title.split(" — ")[0])}</b><span>${esc(s.text)}</span><i class="chan">${CHANNEL[s.channel] || s.channel}${s.has_image ? " · image" : ""}</i></button>`).join("")}</div>`
+      <div class="samples">${S.samples.map(s => `<button class="sample" data-sample="${s.id}"><b>${esc(s.title.split(" — ")[0])}</b><span>${esc(s.text)}</span><i class="chan">${s.lang ? `<span class="lang-tag">${esc(s.lang)}</span> ` : ""}${CHANNEL[s.channel] || s.channel}${s.has_image ? " · image" : ""}</i></button>`).join("")}</div>`
       : `<p class="muted">Samples are written for the Neem &amp; Nila demo brand. Switch brand in the top bar to use them, or check your own content here.</p>`}
     </div>
     <div class="panel">
@@ -369,6 +369,7 @@ function findingsHtml(draft, check, findings, editable) {
       ${editable ? `<button class="btn-sm" id="acceptAll" ${decided === findings.length ? "disabled" : ""}>Accept all fixes</button>` : ""}</div>` : ""}
     ${ai === "failed" ? `<div class="warn small">AI review didn't respond this time, so only rule-based checks are shown. <b>Re-run check</b> to try again.</div>` : ""}
     ${ai === "not_configured" ? `<div class="warn small">AI checks aren't configured; showing rule-based checks only.</div>` : ""}
+    ${s.language && s.language.indic ? `<div class="lang-note small"><span class="lang-tag">${esc(s.language.label)}</span> Checked against the English rulebook in the draft's own language; fixes keep the same language and script.</div>` : ""}
     ${check.model ? `<div class="ai-note small"><span class="ai-dot"></span>AI-assisted by <b>${esc(check.model.replace("sarvam_flash:", "Sarvam ").replace("sarvam:", "Sarvam ").replace("gemini:", "Gemini "))}</b> · every AI finding cites a clause or fact</div>` : ""}
     ${(s.verified_claims || []).length ? `<p class="verified small">✓ Verified against the fact sheet: ${s.verified_claims.map(v => `“${esc(v.quote)}” (${esc(v.cite_code)})`).join(", ")}</p>` : ""}
     ${!findings.length ? `<div class="okbox">No issues found. This content follows the rulebook.</div>` : ""}
@@ -562,7 +563,8 @@ async function insights() {
 /* ---------------- evaluation ---------------- */
 async function evaluation() {
   loading();
-  const [cases, last, exp] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest"), api("GET", "/api/eval/latest?kind=experiment")]);
+  const [allCases, last, exp, indic] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest"), api("GET", "/api/eval/latest?kind=experiment"), api("GET", "/api/eval/latest?kind=indic")]);
+  const cases = allCases.filter(c => c.set === "main"), icases = allCases.filter(c => c.set === "indic");
   app.innerHTML = `
   <div class="page-head"><div><h1>Evaluation</h1><p class="muted">How accurate is Brandproof? We run it on ${cases.length} labelled drafts (${cases.reduce((a, c) => a + c.expected, 0)} known issues) and measure what it catches and what it gets wrong.</p></div>
     <button class="btn-primary" id="runEval">Run evaluation now</button></div>
@@ -572,7 +574,24 @@ async function evaluation() {
       <button class="btn-sm" id="runExp">Run experiment</button></div>
     <p class="small muted">Fair test: Brandproof learns only from the <b>12 sample drafts</b> (their hand labels are replayed as reviewer accepts and disputes), then is measured on the <b>18 other drafts it never saw</b>, before and after learning. About 4–6 minutes with AI.</p>
     <div id="expProgress"></div><div id="expOut">${experimentReport(exp && exp.results, exp && exp.ran_at)}</div></div>
-  <div id="evalOut">${last ? evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>`;
+  <div id="evalOut">${last ? evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>
+  <div class="panel exp indic"><div class="iss-head"><h2>Indian languages: Tamil, Hindi, Tanglish, Hinglish</h2>
+      <button class="btn-sm" id="runIndic">Run language evaluation</button></div>
+    <p class="small muted">${icases.length} more hand-labelled drafts (${icases.reduce((a, c) => a + c.expected, 0)} known issues) written in Tamil and Hindi script and in code-mixed Tanglish and Hinglish, checked against the same English rulebook. About 2–3 minutes.</p>
+    <div id="indicProgress"></div></div>
+  <div id="indicOut">${indic ? evalReport(indic.results, indic.ran_at, true) : ""}</div>`;
+  $("#runIndic").onclick = e => busy(e.currentTarget, async () => {
+    const prog = $("#indicProgress"); let done = 0;
+    const results = await pool(icases, 2, async c => {
+      let r; try { r = await api("POST", "/api/eval/cases/" + c.id); } catch (err) { r = { id: c.id, title: c.title, lang: c.lang, error: err.message, tp: 0, fp: 0, fn: c.expected, by_cat: {}, missed: [], predicted: [] }; }
+      done++; prog.innerHTML = `<div class="progress"><div style="width:${(done / icases.length) * 100}%"></div></div><span class="small muted">Checked ${done} of ${icases.length}</span>`;
+      return r;
+    });
+    prog.innerHTML = "";
+    const summary = { kind: "indic", cases: results };
+    await api("POST", "/api/eval/runs", { results: summary });
+    $("#indicOut").innerHTML = evalReport(summary, new Date().toISOString(), true); enter($("#indicOut"));
+  }, "Running…");
   $("#runExp").onclick = e => busy(e.currentTarget, async () => {
     const r = await runExperiment(cases, $("#expProgress"));
     $("#expOut").innerHTML = experimentReport(r, new Date().toISOString()); enter($("#expOut"));
@@ -589,7 +608,7 @@ async function evaluation() {
     $("#evalOut").innerHTML = evalReport(summary, new Date().toISOString()); enter($("#evalOut"));
   }, "Running…");
 }
-function evalReport(res, at) {
+function evalReport(res, at, byLang) {
   const cases = res.cases; const cats = {};
   let tp = 0, fp = 0, fn = 0, dropped = 0, aiFail = 0;
   for (const c of cases) {
@@ -608,11 +627,13 @@ function evalReport(res, at) {
   </div>
   ${aiFail ? `<div class="warn">${aiFail} case(s) ran without AI (provider unavailable), so tone, legal and fact checks are under-counted.</div>` : ""}
   <div class="grid-2">
+    ${byLang ? `<div class="panel"><h2>By language</h2><table><thead><tr><th>Language</th><th>Drafts</th><th>Precision</th><th>Recall</th><th>Caught</th><th>Missed</th><th>False alarms</th></tr></thead><tbody>
+      ${Object.entries(cases.reduce((m, c) => { const x = (m[c.lang || "Other"] = m[c.lang || "Other"] || { n: 0, tp: 0, fp: 0, fn: 0 }); x.n++; x.tp += c.tp; x.fp += c.fp; x.fn += c.fn; return m; }, {})).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${fmt(P(v.tp, v.fp))}</td><td>${fmt(P(v.tp, v.fn))}</td><td>${v.tp}</td><td>${v.fn}</td><td>${v.fp}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <div class="panel"><h2>By issue type</h2><table><thead><tr><th>Type</th><th>Precision</th><th>Recall</th><th>Caught</th><th>Missed</th><th>False alarms</th></tr></thead><tbody>
       ${Object.entries(cats).sort().map(([k, v]) => `<tr><td>${CAT[k] || k}</td><td>${fmt(P(v.tp, v.fp))}</td><td>${fmt(P(v.tp, v.fn))}</td><td>${v.tp}</td><td>${v.fn}</td><td>${v.fp}</td></tr>`).join("")}</tbody></table>
       <p class="muted small">Run ${ago(at)} on ${cases.length} drafts.</p></div>
     <div class="panel"><h2>Per draft</h2><table><thead><tr><th>Draft</th><th>Caught</th><th>Missed</th><th>False</th></tr></thead><tbody>
-      ${cases.map(c => `<tr><td>${esc(c.title)}${c.missed?.length ? `<div class="muted small">Missed: ${c.missed.map(m => `${CAT[m.category] || m.category} ${m.quote === "*" ? "(whole draft)" : `“${esc(m.quote)}”`}`).join("; ")}</div>` : ""}${c.error ? `<div class="bad small">${esc(c.error)}</div>` : ""}</td><td>${c.tp}</td><td class="${c.fn ? "bad" : ""}">${c.fn}</td><td class="${c.fp ? "bad" : ""}">${c.fp}</td></tr>`).join("")}</tbody></table></div>
+      ${cases.map(c => `<tr><td>${esc(c.title)}${c.missed?.length ? `<div class="muted small">Missed: ${c.missed.map(m => `${CAT[m.category] || m.category} ${m.quote === "*" ? "(whole draft)" : `“${esc(m.quote)}”`}`).join("; ")}</div>` : ""}${(c.predicted || []).some(p => !p.correct) ? `<div class="small fa">False alarms: ${c.predicted.filter(p => !p.correct).map(p => `${CAT[p.category] || p.category} ${p.quote === "[image]" ? "(image)" : `“${esc(p.quote)}”`} <span class="muted">(${esc(p.cite_code || "")}, ${p.source === "ai" ? "AI " + Math.round((p.confidence || 0) * 100) + "%" : "rule"})</span>`).join("; ")}</div>` : ""}${c.error ? `<div class="bad small">${esc(c.error)}</div>` : ""}</td><td>${c.tp}</td><td class="${c.fn ? "bad" : ""}">${c.fn}</td><td class="${c.fp ? "bad" : ""}">${c.fp}</td></tr>`).join("")}</tbody></table></div>
   </div>`;
 }
 

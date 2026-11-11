@@ -14,6 +14,9 @@ from pydantic import BaseModel, Field  # noqa: E402
 from _core import auth, db, engine, evaluation, learning, llm, rulebook, workflow, workspace  # noqa: E402
 from _core.demo_data import CHANNELS  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
+from _core.regional import REGIONAL  # noqa: E402
+
+ALL_SAMPLES = SAMPLES + [r for r in REGIONAL if r.get("sample")]
 
 app = FastAPI(title="Brandproof API", version="0.2.0",
               description="Brand governance before publication: check content against approved guidelines, "
@@ -87,7 +90,7 @@ def me(user=Depends(auth.current)):
 @app.get("/api/samples")
 def samples(user=Depends(auth.current)):
     return [{"id": s["id"], "title": s["title"], "channel": s["channel"], "text": s["text"],
-             "has_image": bool(s.get("image"))} for s in SAMPLES]
+             "has_image": bool(s.get("image")), "lang": s.get("lang")} for s in ALL_SAMPLES]
 
 
 class DraftIn(BaseModel):
@@ -106,7 +109,7 @@ def create_draft(body: DraftIn, user=Depends(auth.current)):
     b = brand_of(user, body.brand_id)
     text, image, alt, title, channel = body.text, body.image_b64, body.alt_text, body.title, body.channel
     if body.sample_id:
-        s = next((x for x in SAMPLES if x["id"] == body.sample_id), None)
+        s = next((x for x in ALL_SAMPLES if x["id"] == body.sample_id), None)
         if not s:
             raise HTTPException(404, "Sample not found")
         text, channel, title = s["text"], s["channel"], s["title"]
