@@ -12,8 +12,8 @@ import time
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))           # primary provider
 FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "30"))
 BUDGET = float(os.getenv("LLM_BUDGET", "90"))             # whole call, all providers
-FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "openai_compat"]
-VISION_ORDER = ["gemini", "sarvam_flash", "openai_compat"]
+FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "gemini_backup", "openai_compat"]
+VISION_ORDER = ["gemini", "gemini_backup", "sarvam_flash", "openai_compat"]
 DEAD_FOR = 600  # seconds to skip a provider after "no credits" / bad key
 _DEAD = {}
 
@@ -32,6 +32,12 @@ PROVIDERS = {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "key": "GEMINI_API_KEY",
         "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+    },
+    # A second Gemini model with its own free quota, used when the first is rate-limited (429).
+    "gemini_backup": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" if os.getenv("GEMINI_BACKUP_MODEL") else "",
+        "key": "GEMINI_API_KEY",
+        "model": os.getenv("GEMINI_BACKUP_MODEL", "").strip(),
     },
     "openai_compat": {
         "url": os.getenv("OPENAI_COMPAT_URL", ""),
@@ -163,6 +169,8 @@ def _call(name, p, system, user, schema, schema_name, vision_image, timeout):
             continue
         if r.status_code in (401, 402, 403):  # bad key or no credits: skip this provider for a while
             _DEAD[name] = time.time() + DEAD_FOR
+        elif r.status_code == 429:  # still rate-limited after the retry: rest it for a minute
+            _DEAD[name] = time.time() + 60
         if r.status_code >= 400:
             raise AIError(f"{r.status_code} {r.text[:300]}")
         msg = r.json()["choices"][0]["message"]
@@ -180,7 +188,7 @@ def chat_json(system, user, schema, schema_name="result", vision_image=None):
     deadline = time.time() + BUDGET
     errors = []
     start = time.time()
-    for i, (name, p) in enumerate(cands[:3]):
+    for i, (name, p) in enumerate(cands[:4]):
         left = deadline - time.time()
         if left < 8:
             break

@@ -387,3 +387,5 @@ table.cmp td:nth-child(2), table.cmp td:nth-child(3) { text-align: center; } tab
 .suggestion textarea { min-height: 70px; font-size: .88rem; }
 .chk { display: inline-flex; align-items: center; gap: .4rem; } .chk input { width: auto; }
 @media (max-width: 760px) { .sg-cols { grid-template-columns: 1fr; } }
+.pub-note { color: var(--primary-2); margin: .2rem 0 .5rem; }
+.owner { margin: 1.4rem 0 .5rem; } .owner summary { cursor: pointer; } .owner .row { margin-top: .5rem; max-width: 420px; }

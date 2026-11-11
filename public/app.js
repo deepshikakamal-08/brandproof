@@ -646,13 +646,19 @@ async function evaluation() {
   <div class="panel exp"><div class="iss-head"><h2>Learning experiment: does learning from reviewers cut false alarms?</h2>
       <button class="btn-sm" id="runExp">Run experiment</button></div>
     <p class="small muted">Fair test: Brandproof learns only from the <b>12 sample drafts</b> (their hand labels are replayed as reviewer accepts and disputes), then is measured on the <b>18 other drafts it never saw</b>, before and after learning. About 4–6 minutes with AI.</p>
-    <div id="expProgress"></div><div id="expOut">${experimentReport(exp && exp.results, exp && exp.ran_at)}</div></div>
-  <div id="evalOut">${last ? evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>
+    <div id="expProgress"></div><div id="expOut">${publishedNote(exp && exp.results)}${experimentReport(exp && exp.results, exp && exp.ran_at)}</div></div>
+  <div id="evalOut">${last ? publishedNote(last.results) + evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>
   <div class="panel exp indic"><div class="iss-head"><h2>Indian languages: Tamil, Hindi, Tanglish, Hinglish</h2>
       <button class="btn-sm" id="runIndic">Run language evaluation</button></div>
     <p class="small muted">${icases.length} more hand-labelled drafts (${icases.reduce((a, c) => a + c.expected, 0)} known issues) written in Tamil and Hindi script and in code-mixed Tanglish and Hinglish, checked against the same English rulebook. About 2–3 minutes.</p>
     <div id="indicProgress"></div></div>
-  <div id="indicOut">${indic ? evalReport(indic.results, indic.ran_at, true) : ""}</div>`;
+  <div id="indicOut">${indic ? publishedNote(indic.results) + evalReport(indic.results, indic.ran_at, true) : ""}</div>
+  <details class="small muted owner"><summary>Team only: publish these results for every visitor</summary>
+    <div class="row"><input id="pubCode" type="password" placeholder="Publish code" autocomplete="off"><button class="btn-sm" id="pubBtn">Publish</button></div></details>`;
+  $("#pubBtn").onclick = e => busy(e.currentTarget, async () => {
+    const r = await api("POST", "/api/eval/publish", { code: $("#pubCode").value });
+    toast(r.published.length ? `Published: ${r.published.join(", ")}` : "Nothing to publish yet: run the evaluations first");
+  }, "Publishing…");
   $("#runIndic").onclick = e => busy(e.currentTarget, async () => {
     const prog = $("#indicProgress"); let done = 0;
     const results = await pool(icases, 1, async c => {
@@ -680,6 +686,9 @@ async function evaluation() {
     await api("POST", "/api/eval/runs", { results: summary });
     $("#evalOut").innerHTML = evalReport(summary, new Date().toISOString()); enter($("#evalOut"));
   }, "Running…");
+}
+function publishedNote(res) {
+  return res && res.published_from ? `<p class="small pub-note">Saved results from the team's last full run (${new Date(res.published_from).toLocaleString()}). Click Run to measure it yourself, live.</p>` : "";
 }
 function evalReport(res, at, byLang) {
   const cases = res.cases; const cats = {};

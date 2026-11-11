@@ -490,6 +490,27 @@ def eval_save(body: EvalSave, user=Depends(auth.current)):
     return {"ok": True}
 
 
+class PublishIn(BaseModel):
+    code: str = Field(..., max_length=200)
+
+
+@app.post("/api/eval/publish")
+def eval_publish(body: PublishIn, user=Depends(auth.current)):
+    """Owner only (needs PUBLISH_CODE): show this workspace's latest results to every new visitor,
+    so judges see full numbers without spending AI quota."""
+    import hmac
+    want = os.getenv("PUBLISH_CODE", "")
+    if not want or not hmac.compare_digest(body.code.strip(), want.strip()):
+        raise HTTPException(403, "Wrong publish code.")
+    done = []
+    for kind in ("eval", "experiment", "indic"):
+        r = evaluation.latest(user["org_id"], kind)
+        if r and r["org_id"] == user["org_id"]:
+            evaluation.save_run("published", {**r["results"], "published_from": r["ran_at"]})
+            done.append(kind)
+    return {"published": done}
+
+
 @app.get("/api/eval/latest")
 def eval_latest(kind: str = "eval", user=Depends(auth.current)):
     return evaluation.latest(user["org_id"], kind)
