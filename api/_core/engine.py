@@ -130,6 +130,19 @@ def _fix_ok(text, start, end, fix):
     return fix
 
 
+SECTION_CATEGORY = [("tone", "tone"), ("voice", "tone"), ("claim", "claims"), ("fact", "claims"), ("legal", "legal"),
+                    ("disclos", "legal"), ("access", "accessibility"), ("brand basic", "terminology"),
+                    ("terminolog", "terminology"), ("name", "terminology")]
+
+
+def _section_category(clause, fallback):
+    sec = (clause.get("section") or clause.get("title") or "").lower()
+    for key, cat in SECTION_CATEGORY:
+        if key in sec:
+            return cat
+    return fallback
+
+
 def _overlaps(a, b):
     return a["start"] is not None and b["start"] is not None and a["start"] < b["end"] and b["start"] < a["end"]
 
@@ -308,12 +321,18 @@ def _gate(text, it, ids, existing, kind):
         return None
     s, e = loc
     category = "claims" if kind == "claim" else it.get("category", "tone")
+    if kind != "claim" and rtype == "clause":
+        category = _section_category(src, category)  # the cited clause decides the type, not the model's label
     if category not in ("tone", "claims", "legal", "accessibility", "terminology"):
         category = "tone"
     cand = {"start": s, "end": e}
     for ex in existing:
-        if ex["category"] == category and _overlaps(ex, cand):
-            return None  # an exact rule already covers this
+        if not _overlaps(ex, cand):
+            continue
+        if ex["category"] == category or ex.get("cite_code") == (src.get("code") if rtype == "clause" else None):
+            return None  # an exact rule (or an earlier finding) already covers this
+        if ex.get("source") == "rule" and (e - s) <= 2 * ((ex["end"] or 0) - (ex["start"] or 0)):
+            return None  # the AI is re-flagging the same few words a rule already flagged
     fix = it.get("fix_text") or None
     fix = _fix_ok(text, s, e, fix) if fix else None
     if fix and (e - s) > 40 and any(_overlaps(ex, cand) for ex in existing):

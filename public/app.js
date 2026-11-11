@@ -655,8 +655,8 @@ async function evaluation() {
   <div id="indicOut">${indic ? evalReport(indic.results, indic.ran_at, true) : ""}</div>`;
   $("#runIndic").onclick = e => busy(e.currentTarget, async () => {
     const prog = $("#indicProgress"); let done = 0;
-    const results = await pool(icases, 2, async c => {
-      let r; try { r = await api("POST", "/api/eval/cases/" + c.id); } catch (err) { r = { id: c.id, title: c.title, lang: c.lang, error: err.message, tp: 0, fp: 0, fn: c.expected, by_cat: {}, missed: [], predicted: [] }; }
+    const results = await pool(icases, 1, async c => {
+      let r; try { r = await evalCase(c.id); } catch (err) { r = { id: c.id, title: c.title, lang: c.lang, error: err.message, tp: 0, fp: 0, fn: c.expected, by_cat: {}, missed: [], predicted: [] }; }
       done++; prog.innerHTML = `<div class="progress"><div style="width:${(done / icases.length) * 100}%"></div></div><span class="small muted">Checked ${done} of ${icases.length}</span>`;
       return r;
     });
@@ -673,7 +673,7 @@ async function evaluation() {
     const results = []; const prog = $("#evalProgress");
     for (let k = 0; k < cases.length; k++) {
       prog.innerHTML = `<div class="progress"><div style="width:${(k / cases.length) * 100}%"></div></div><span class="small muted">Checking ${k + 1} of ${cases.length}: ${esc(cases[k].title)}</span>`;
-      try { results.push(await api("POST", "/api/eval/cases/" + cases[k].id)); } catch (err) { results.push({ id: cases[k].id, title: cases[k].title, error: err.message, tp: 0, fp: 0, fn: cases[k].expected, by_cat: {}, missed: [], predicted: [] }); }
+      try { results.push(await evalCase(cases[k].id)); } catch (err) { results.push({ id: cases[k].id, title: cases[k].title, error: err.message, tp: 0, fp: 0, fn: cases[k].expected, by_cat: {}, missed: [], predicted: [] }); }
     }
     prog.innerHTML = "";
     const summary = { cases: results };
@@ -760,6 +760,14 @@ async function learningPage() {
   });
 }
 
+/* one labelled case; if the AI provider was busy, wait and try once more so results aren't skewed */
+async function evalCase(id, q = "") {
+  const call = () => api("POST", `/api/eval/cases/${id}${q ? "?" + q : ""}`);
+  let r = await call();
+  if (r.ai_status && r.ai_status !== "ok") { await new Promise(res => setTimeout(res, 4000)); try { const r2 = await call(); if (r2.ai_status === "ok" || !r.predicted) r = r2; } catch (_) { /* keep first */ } }
+  return r;
+}
+
 /* learning experiment: learn on 12 drafts, measure on 18 unseen drafts, before vs after */
 function metrics(cases) {
   let tp = 0, fp = 0, fn = 0, flags = 0, hidden = 0, aiFail = 0;
@@ -775,7 +783,7 @@ async function pool(items, n, fn) {
 async function runExperiment(cases, prog) {
   const split = await api("GET", "/api/eval/split");
   const title = id => (cases.find(c => c.id === id) || {}).title || id;
-  const one = async (id, q) => { try { return await api("POST", `/api/eval/cases/${id}?${q}`); } catch (e) { return { id, title: title(id), error: e.message, tp: 0, fp: 0, fn: (cases.find(c => c.id === id) || {}).expected || 0, predicted: [] }; } };
+  const one = async (id, q) => { try { return await evalCase(id, q); } catch (e) { return { id, title: title(id), error: e.message, tp: 0, fp: 0, fn: (cases.find(c => c.id === id) || {}).expected || 0, predicted: [] }; } };
   const total = split.train.length + split.test.length * 2; let done = 0;
   const tick = label => { done++; prog.innerHTML = `<div class="progress"><div style="width:${(done / total) * 100}%"></div></div><span class="small muted">${label} (${done} of ${total})</span>`; };
   tick("Step 1 of 3: clearing earlier training decisions"); done--;

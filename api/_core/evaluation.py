@@ -41,9 +41,12 @@ def score_case(org_id, brand, case_id, learn=True, train=False):
     version = {"text": c["text"], "image_b64": image, "alt_text": c.get("alt_text")}
     res = engine.run_check(org_id, brand, version, c["channel"], learn=learn)
     preds = res["findings"]
+    if train:  # a re-run replaces this draft's earlier training decisions instead of adding to them
+        db.exec("DELETE FROM feedback WHERE org_id = ? AND brand_id = ? AND finding_id LIKE ?",
+                (org_id, brand["id"], f"cal:{case_id}:%"))
     exp = [{"category": cat, "quote": q, "spans": _spans(c["text"], q), "hit": False} for cat, q in c["expected"]]
     pred_rows = []
-    for p in preds:
+    for i, p in enumerate(preds):
         matched = False
         for e in exp:
             if e["category"] != p["category"]:
@@ -55,7 +58,7 @@ def score_case(org_id, brand, case_id, learn=True, train=False):
         pred_rows.append({"category": p["category"], "quote": p["quote"], "source": p["source"],
                           "cite_code": p["cite_code"], "correct": matched, "confidence": p.get("confidence")})
         if train:
-            learning.record(org_id, brand["id"], {**p, "id": None}, "accepted" if matched else "disputed",
+            learning.record(org_id, brand["id"], {**p, "id": f"cal:{case_id}:{i}"}, "accepted" if matched else "disputed",
                             "" if matched else "Labelled as not an issue in the training draft", origin="calibration")
     return {
         "id": c["id"], "title": c.get("title", c["id"]), "ai_status": res["ai_status"], "lang": c.get("lang", "English"),

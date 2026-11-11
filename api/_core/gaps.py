@@ -84,8 +84,9 @@ def suggest(org_id, brand, code, reason=""):
               "and one sentence on what you changed.")
     try:
         data, model = llm.chat_json(SYSTEM, prompt, SUGGEST_SCHEMA, "guideline_rewrite")
-    except llm.AIError as e:
-        raise ValueError("The AI could not suggest a rewrite right now. Please try again.") from e
+    except Exception as e:  # AI busy or down: draft one from the reviewers' own decisions instead
+        print(f"[gaps] AI rewrite failed for {code}: {str(e)[:160]}", flush=True)
+        data, model = _fallback(c, ex), "rules:reviewer-decisions"
     rewrite = (data.get("rewrite") or "").strip()
     if not rewrite:
         raise ValueError("The AI returned an empty suggestion. Please try again.")
@@ -99,6 +100,19 @@ def suggest(org_id, brand, code, reason=""):
         "dont_examples": db.jdump([str(x)[:200] for x in (data.get("dont_examples") or [])][:3]),
         "why": (data.get("why") or "")[:400], "model": model, "status": "pending", "created_at": db.now()})
     return _row(db.one("SELECT * FROM clause_suggestions WHERE id = ?", (sid,)))
+
+
+def _fallback(clause, examples):
+    """Deterministic suggestion built from real decisions: disputed cases become allowed examples,
+    accepted cases become examples of breaches. Used when the AI is unavailable."""
+    allowed = [e["quote"] for e in examples if e["decision"] == "disputed"][:2]
+    breaches = [e["quote"] for e in examples if e["decision"] == "accepted"][:2]
+    text = clause["text"].strip()
+    if allowed:
+        text += " This does not apply to wording like " + " or ".join(f"'{q}'" for q in allowed) + \
+            ", which reviewers have accepted."
+    return {"rewrite": text, "do_examples": allowed, "dont_examples": breaches,
+            "why": "Drafted from your reviewers' decisions because the AI was unavailable; edit before approving."}
 
 
 def compose(text, do, dont):

@@ -143,14 +143,15 @@ def prompt_fingerprint(pol):
     """Changes only when the examples given to the AI change (keeps the cache useful)."""
     if not pol or not pol["enabled"]:
         return "off"
-    h = hashlib.sha256()
+    h, any_examples = hashlib.sha256(), False
     for code in sorted(k for k in pol["clauses"] if k):
         c = pol["clauses"][code]
         if c["mode"] == "off":
             continue
         for e in c["examples"]:
+            any_examples = True
             h.update(f"{code}|{e['decision']}|{e['quote']}".encode())
-    return h.hexdigest()[:16]
+    return h.hexdigest()[:16] if any_examples else "off"  # same prompt as no history, so cached results are reused
 
 
 def prompt_block(pol, picked):
