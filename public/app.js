@@ -357,7 +357,7 @@ function findingsHtml(draft, check, findings, editable) {
   return `
     <div class="iss-head">
       <h2>Issues</h2>
-      <span class="muted small">${s.cached ? "saved result · " : ""}${(check.duration_ms / 1000).toFixed(1)} s</span>
+      <span class="muted small">${s.rulebook_version ? `<span title="The rulebook version this check used">rulebook v${s.rulebook_version}</span> · ` : ""}${s.cached ? "saved result · " : ""}${(check.duration_ms / 1000).toFixed(1)} s</span>
     </div>
     <div class="statline">
       <span><b>${findings.length}</b> issues</span>
@@ -472,15 +472,20 @@ function wordDiff(a, b) {
 /* ---------------- rulebook ---------------- */
 async function rulebook() {
   loading("Loading rulebook…");
-  const rb = await api("GET", "/api/rulebook?brand_id=" + S.brandId);
+  const [rb, gp, vh] = await Promise.all([api("GET", "/api/rulebook?brand_id=" + S.brandId),
+    api("GET", "/api/rulebook/gaps?brand_id=" + S.brandId), api("GET", "/api/rulebook/versions?brand_id=" + S.brandId)]);
   const canEdit = ["admin", "manager"].includes(S.me.role);
   const sections = {};
   rb.clauses.forEach(c => (sections[c.section] = sections[c.section] || []).push(c));
   const drafts = rb.clauses.filter(c => c.status !== "confirmed").length;
   const today = new Date().toISOString().slice(0, 10);
   app.innerHTML = `
-  <div class="page-head"><div><h1>Rulebook · ${esc(rb.brand.name)}</h1><p class="muted">${rb.clauses.length} clauses, ${rb.facts.length} approved facts, ${rb.terms.length} terms. Every finding cites one of these.</p></div>
-    ${canEdit ? `<button class="btn-primary" id="importToggle">Import a guideline PDF</button>` : ""}</div>
+  <div class="page-head"><div><h1>Rulebook · ${esc(rb.brand.name)} <span class="ver-badge" title="Every change saves a new version">v${vh.current}</span></h1><p class="muted">${rb.clauses.length} clauses, ${rb.facts.length} approved facts, ${rb.terms.length} terms. Every finding cites one of these.</p></div>
+    <div class="row"><button class="btn-sm" id="histToggle">Version history</button>${canEdit ? `<button class="btn-primary" id="importToggle">Import a guideline PDF</button>` : ""}</div></div>
+  <div class="panel" id="histPanel" hidden><h2>Version history</h2>
+    <div class="ver-list">${vh.versions.map(v => `<button class="ver-item" data-ver="${v.version}"><b>v${v.version}</b><span>${esc(v.note || "")}</span><span class="muted small">${esc(v.actor || "")} · ${ago(v.created_at)}</span></button>`).join("")}</div>
+    <div id="verDiff" class="small muted">Pick a version to see what changed.</div></div>
+  ${gapsHtml(gp, canEdit)}
   ${!canEdit ? `<div class="warn">Switch <b>Role</b> to Admin or Manager to edit clauses or import a new guideline.</div>` : ""}
   <div class="panel" id="importPanel" hidden>
     <h2>Import a brand guideline</h2>
@@ -511,6 +516,13 @@ async function rulebook() {
     </div>
   </div>`;
   if ($("#importToggle")) $("#importToggle").onclick = () => { $("#importPanel").hidden = !$("#importPanel").hidden; };
+  $("#histToggle").onclick = () => { $("#histPanel").hidden = !$("#histPanel").hidden; };
+  app.querySelectorAll("[data-ver]").forEach(b => b.onclick = async () => {
+    app.querySelectorAll("[data-ver]").forEach(x => x.classList.toggle("on", x === b));
+    try { $("#verDiff").innerHTML = diffHtml(await api("GET", `/api/rulebook/versions/${b.dataset.ver}?brand_id=${S.brandId}`)); }
+    catch (e) { $("#verDiff").textContent = e.message; }
+  });
+  bindGaps(gp);
   if ($("#impBtn")) $("#impBtn").onclick = e => busy(e.currentTarget, async () => {
     const f = $("#impPdf").files[0];
     const body = { name: $("#impName").value || "Imported brand", text: $("#impText").value, pdf_b64: f ? await fileB64(f) : null };
@@ -530,8 +542,69 @@ function clauseHtml(c, canEdit) {
   return `<div class="clause"><div class="row"><span class="code">${esc(c.code)}</span><b>${esc(c.title)}</b><span class="spacer"></span>
     ${c.kind === "exact" ? `<span class="pill rule" title="Checked by code${c.check_type ? ": " + c.check_type : ""}">Exact rule</span>` : `<span class="pill ai" title="Checked by AI, which must cite this clause">AI-judged${c.visual ? " · image" : ""}</span>`}
     ${c.status !== "confirmed" ? `<span class="pill in_review">Needs review</span>` : ""}
-    ${canEdit ? `<button class="btn-ghost btn-sm" data-editc="${c.id}">Edit</button>` : ""}</div>
+    ${canEdit ? `<button class="btn-ghost btn-sm" data-editc="${c.id}">Edit</button>${c.kind === "judgement" ? `<button class="btn-ghost btn-sm" data-clarify="${esc(c.code)}" title="Ask the AI for clearer wording with do/don't examples">Clarify</button>` : ""}` : ""}</div>
     <p class="small" style="margin:.3rem 0 0">${esc(c.text)}</p></div>`;
+}
+
+/* guideline-gap assistant (improvement 3) */
+function gapsHtml(gp, canEdit) {
+  const list = gp.candidates;
+  return `<div class="panel gaps" id="gapsPanel"><div class="iss-head"><h2>Guideline gaps</h2><span class="muted small">${list.length ? `${list.length} guideline${list.length > 1 ? "s" : ""} look unclear` : ""}</span></div>
+    <p class="muted small">Guidelines that reviewers often dispute, or that the AI applies with low confidence, get a suggested clearer wording with do/don't examples. Nothing changes until an admin approves it.</p>
+    ${list.length ? list.map(g => `<div class="gap" data-gap="${esc(g.code)}">
+        <div class="row"><span class="code">${esc(g.code)}</span><b>${esc(g.title)}</b><span class="spacer"></span>${canEdit && !g.suggestion ? `<button class="btn-sm btn-primary" data-suggest="${esc(g.code)}" data-reason="${esc(g.reason)}">Suggest clearer wording</button>` : ""}</div>
+        <p class="small gap-why">${esc(g.reason)}</p>
+        <div class="slot">${g.suggestion ? suggestionHtml(g.suggestion, canEdit) : ""}</div></div>`).join("")
+      : `<div class="empty small">No unclear guidelines yet. They appear here once reviewers dispute a guideline's flags (try the learning experiment on <a href="#/eval">Evaluation</a>)${canEdit ? ", or click <b>Clarify</b> on any AI-judged guideline below" : ""}.</div>`}
+    <div id="gapAdhoc"></div>
+    ${gp.recent.length ? `<details class="small" style="margin-top:.6rem"><summary>Recent decisions (${gp.recent.length})</summary>${gp.recent.map(r => `<div class="hidden-item"><b>${esc(r.code)}</b> ${r.status === "approved" ? `<span class="good">approved → v${r.version}</span>` : `<span class="muted">rejected</span>`} by ${esc(r.decided_by || "")}<div class="muted">${esc(r.new_text)}</div></div>`).join("")}</details>` : ""}
+    ${canEdit ? "" : `<p class="small muted">Switch Role to Admin or Manager to request and approve rewrites.</p>`}</div>`;
+}
+function suggestionHtml(sg, canEdit) {
+  return `<div class="suggestion" data-sid="${sg.id}">
+    <div class="sg-cols"><div><div class="sg-label">Current</div><p class="small diff-del-block">${esc(sg.old_text)}</p></div>
+      <div><div class="sg-label">Suggested</div>${canEdit ? `<textarea class="sg-text">${esc(sg.new_text)}</textarea>` : `<p class="small">${esc(sg.new_text)}</p>`}</div></div>
+    <div class="sg-cols"><div><div class="sg-label good">Do</div>${canEdit ? `<textarea class="sg-do" rows="3">${esc(sg.do_examples.join("\n"))}</textarea>` : sg.do_examples.map(x => `<div class="small">✓ ${esc(x)}</div>`).join("")}</div>
+      <div><div class="sg-label bad">Don't</div>${canEdit ? `<textarea class="sg-dont" rows="3">${esc(sg.dont_examples.join("\n"))}</textarea>` : sg.dont_examples.map(x => `<div class="small">✗ ${esc(x)}</div>`).join("")}</div></div>
+    ${sg.why ? `<p class="small muted">${esc(sg.why)} <span class="tag ai">${esc((sg.model || "").split(":").pop())}</span></p>` : ""}
+    ${canEdit ? `<div class="row"><label class="small chk"><input type="checkbox" class="sg-reset" checked> Reset learning history for this guideline</label><span class="spacer"></span>
+      <button class="btn-sm" data-sgno="${sg.id}">Reject</button><button class="btn-sm btn-good" data-sgyes="${sg.id}">Approve → new version</button></div>` : ""}</div>`;
+}
+function bindGaps(gp) {
+  const lines = el => el.value.split("\n").map(x => x.trim()).filter(Boolean);
+  const bindSuggestion = box => {
+    const yes = box.querySelector("[data-sgyes]"), no = box.querySelector("[data-sgno]");
+    if (yes) yes.onclick = e => busy(e.currentTarget, async () => {
+      const r = await api("POST", `/api/rulebook/suggestions/${yes.dataset.sgyes}/decision`, { approve: true, brand_id: S.brandId,
+        text: box.querySelector(".sg-text").value, do_examples: lines(box.querySelector(".sg-do")), dont_examples: lines(box.querySelector(".sg-dont")),
+        reset_history: box.querySelector(".sg-reset").checked });
+      toast(`Guideline updated · rulebook v${r.version}`); rulebook();
+    }, "Saving…");
+    if (no) no.onclick = e => busy(e.currentTarget, async () => {
+      await api("POST", `/api/rulebook/suggestions/${no.dataset.sgno}/decision`, { approve: false, brand_id: S.brandId });
+      toast("Suggestion rejected"); rulebook();
+    }, "Saving…");
+  };
+  app.querySelectorAll(".suggestion").forEach(bindSuggestion);
+  const ask = async (btn, code, reason, slot) => busy(btn, async () => {
+    const sg = await api("POST", "/api/rulebook/gaps/suggest", { code, reason, brand_id: S.brandId });
+    slot.innerHTML = suggestionHtml(sg, true); bindSuggestion(slot.querySelector(".suggestion")); enter(slot);
+    if (btn.dataset.suggest) btn.remove();
+  }, "Thinking…");
+  app.querySelectorAll("[data-suggest]").forEach(b => b.onclick = () => ask(b, b.dataset.suggest, b.dataset.reason, b.closest(".gap").querySelector(".slot")));
+  app.querySelectorAll("[data-clarify]").forEach(b => b.onclick = () => {
+    const code = b.dataset.clarify, slot = $("#gapAdhoc");
+    slot.innerHTML = `<div class="gap"><div class="row"><span class="code">${esc(code)}</span><b>Requested rewrite</b></div><div class="slot"></div></div>`;
+    $("#gapsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+    ask(b, code, "An admin asked for clearer wording.", slot.querySelector(".slot"));
+  });
+}
+function diffHtml(d) {
+  if (!d.changes.length) return `<p><b>v${d.version}</b> · ${esc(d.note || "")} · no rule changes recorded.</p>`;
+  return `<p><b>v${d.version}</b>${d.previous ? ` vs v${d.previous}` : ""} · ${esc(d.note || "")} · ${esc(d.actor || "")}, ${ago(d.created_at)}</p>
+    ${d.changes.slice(0, 40).map(c => `<div class="vchange"><span class="pill ${c.type === "removed" ? "in_review" : "rule"}">${c.type}</span> <b>${esc(c.what)} ${esc(c.code)}</b>
+      ${c.old ? `<div class="diff-del-block">${esc(c.old)}</div>` : ""}${c.new ? `<div class="diff-ins-block">${esc(c.new)}</div>` : ""}</div>`).join("")}
+    ${d.changes.length > 40 ? `<p class="muted">…and ${d.changes.length - 40} more.</p>` : ""}`;
 }
 
 /* ---------------- insights ---------------- */
@@ -660,7 +733,7 @@ async function learningPage() {
     <div class="kpi"><b>${counts.trusted || 0}</b><span>guidelines trusted</span></div>
   </div>
   <div class="panel how-learn"><h2>How it learns</h2><ol class="small">
-    <li><b>Per guideline:</b> disputed in half or more of 2+ decisions → <b>softened</b> to low severity. AI flags disputed in 75%+ of 3+ decisions → <b>muted</b>. Exact rule checks are never hidden, only softened.</li>
+    <li><b>Per guideline:</b> disputed in half or more of 2+ decisions → <b>softened</b> to low severity. AI flags disputed in 80%+ of 4+ decisions → <b>muted</b>. Exact rule checks are never hidden, only softened.</li>
     <li><b>Confidence cut-off:</b> from past AI decisions it picks the minimum confidence that keeps the most accepted flags and drops the most disputed ones.</li>
     <li><b>Examples for the AI:</b> up to 3 recent accepted and disputed cases per guideline are added to the AI prompt, so the model follows your reviewers' judgement.</li>
     <li><b>No repeats:</b> text that reviewers already disputed for a guideline (and never accepted) isn't flagged again.</li>

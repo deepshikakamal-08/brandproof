@@ -70,6 +70,15 @@ SCHEMA = [
         org_id TEXT NOT NULL, brand_id TEXT NOT NULL, code TEXT NOT NULL, enabled INTEGER DEFAULT 1,
         updated_at TEXT, PRIMARY KEY (org_id, brand_id, code))""",
     "CREATE INDEX IF NOT EXISTS ix_feedback_brand ON feedback (org_id, brand_id)",
+    # Rulebook history (improvement 3): a snapshot per change, so every check names the version it used
+    """CREATE TABLE IF NOT EXISTS rulebook_versions (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, brand_id TEXT NOT NULL, version INTEGER, note TEXT,
+        actor TEXT, created_at TEXT, snapshot TEXT)""",
+    # Guideline-gap assistant suggestions (pending -> approved / rejected)
+    """CREATE TABLE IF NOT EXISTS clause_suggestions (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, brand_id TEXT NOT NULL, code TEXT, reason TEXT, old_text TEXT,
+        new_text TEXT, do_examples TEXT, dont_examples TEXT, why TEXT, model TEXT, status TEXT DEFAULT 'pending',
+        created_at TEXT, decided_by TEXT, decided_at TEXT, version INTEGER)""",
     "CREATE INDEX IF NOT EXISTS ix_drafts_org ON drafts (org_id, status)",
     "CREATE INDEX IF NOT EXISTS ix_versions_draft ON versions (draft_id, n)",
     "CREATE INDEX IF NOT EXISTS ix_findings_check ON findings (check_id)",

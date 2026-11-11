@@ -7,7 +7,7 @@ os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ["SQLITE_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
-from _core import engine, evaluation, lang, learning, workspace  # noqa: E402
+from _core import db, engine, evaluation, gaps, lang, learning, versions, workspace  # noqa: E402
 from _core.regional import REGIONAL  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
 
@@ -69,7 +69,7 @@ def test_learning_mutes_and_softens():
     learning.clear(org, brand["id"])
     text = "Hurry, only a few left. Glow Ritual Vitamin C Serum at ₹599. #NeemAndNila"
     ai = next(f for f in check(text)["findings"] if f["source"] == "ai" and f["category"] == "tone")
-    for i in range(3):
+    for i in range(learning.MIN_MUTE):
         learning.record(org, brand["id"], {**ai, "id": f"t{i}", "quote": f"other text {i}"}, "disputed", "fine for us")
     r = check(text)
     assert not [f for f in r["findings"] if f["cite_code"] == ai["cite_code"] and f["source"] == "ai"]
@@ -132,6 +132,35 @@ def test_indic_rules_catch_labelled_issues():
 def test_brand_name_script_fix():
     f = check("நீம் அண்ட் நிலா Calm Neem Face Wash", "whatsapp")["findings"]
     assert any(x["fix_text"] == "Neem & Nila" for x in f)
+
+
+def test_gap_assistant_and_versions():
+    """Improvement 3: a disputed guideline shows up as a gap, the suggestion is approved,
+    the clause changes, a new rulebook version is saved and its diff shows the change."""
+    learning.clear(org, brand["id"])
+    for i in range(3):
+        learning.record(org, brand["id"], {"id": f"g{i}", "source": "ai", "category": "tone", "cite_code": "2.3",
+                                           "quote": f"Only {i} left", "confidence": 0.7}, "disputed", "real stock")
+    cands = gaps.candidates(org, brand["id"])
+    assert cands and cands[0]["code"] == "2.3"
+    v0 = versions.current(org, brand["id"])
+    sg = gaps.suggest(org, brand, "2.3", cands[0]["reason"])
+    assert sg["new_text"] and sg["do_examples"] and sg["status"] == "pending"
+    user = {"name": "Admin", "role": "admin"}
+    r = gaps.decide(org, brand["id"], sg["id"], user, True)
+    assert r["version"] == v0 + 1 and "Do:" in r["text"]
+    clause = db.one("SELECT text FROM clauses WHERE org_id = ? AND brand_id = ? AND code = '2.3'", (org, brand["id"]))
+    assert clause["text"] == r["text"]
+    assert not learning.policy(org, brand["id"])["clauses"].get("2.3"), "history reset after the rewrite"
+    d = versions.diff(org, brand["id"], r["version"])
+    assert any(c["code"] == "2.3" and c["type"] == "changed" for c in d["changes"])
+    try:
+        gaps.decide(org, brand["id"], sg["id"], user, True)
+        raise AssertionError("approving twice must fail")
+    except ValueError:
+        pass
+    h = versions.history(org, brand["id"])
+    assert h["current"] == r["version"] and len(h["versions"]) >= 2
 
 
 if __name__ == "__main__":

@@ -21,10 +21,10 @@ import hashlib
 from . import db
 
 MIN_SOFTEN = 2        # decisions before a clause can be softened
-MIN_MUTE = 3          # decisions before an AI clause can be muted
+MIN_MUTE = 4          # AI decisions before a clause can be muted
 MIN_THRESHOLD = 6     # AI decisions before a confidence threshold is learned
 SOFTEN_RATE = 0.5
-MUTE_RATE = 0.75
+MUTE_RATE = 0.8
 TRUST_RATE = 0.2
 ACCEPTED = ("accepted", "edited")
 
@@ -82,7 +82,7 @@ def _threshold(ai_rows):
         acc = sum(1 for r in kept if r["decision"] in ACCEPTED)
         dis = sum(1 for r in kept if r["decision"] == "disputed")
         lost = sum(1 for r in rows if r["decision"] in ACCEPTED) - acc
-        score = acc - dis - lost * 0.5  # losing a real issue costs; keeping a false alarm costs more
+        score = acc - dis - lost * 1.0  # missing a real issue costs as much as a false alarm
         if best is None or score > best:
             best_t, best = t, score
     base = sum(1 for r in rows if r["decision"] in ACCEPTED) - sum(1 for r in rows if r["decision"] == "disputed")
@@ -108,9 +108,10 @@ def policy(org_id, brand_id, enabled=True):
             c["disputed"] += 1
             c["disputed_quotes"].add(_norm(r["quote"]))
         c["ai" if r["source"] == "ai" else "rule"] += 1
-        if len(c["examples"]) < 4 and r["quote"] and r["quote"] != "[image]":
-            c["examples"].append({"quote": r["quote"], "decision": "disputed" if r["decision"] == "disputed" else "accepted",
-                                  "note": r["note"]})
+        kind = "disputed" if r["decision"] == "disputed" else "accepted"
+        # balanced examples (2 of each at most) so the AI doesn't learn to stay silent
+        if sum(1 for e in c["examples"] if e["decision"] == kind) < 2 and r["quote"] and r["quote"] != "[image]":
+            c["examples"].append({"quote": r["quote"], "decision": kind, "note": r["note"]})
     for c in clauses.values():
         n = c["accepted"] + c["disputed"]
         rate = c["disputed"] / n if n else 0
@@ -161,7 +162,7 @@ def prompt_block(pol, picked):
         h = pol["clauses"].get(c["code"])
         if not h or h["mode"] == "off" or not h["examples"]:
             continue
-        for e in h["examples"][:3]:
+        for e in h["examples"][:4]:
             if e["decision"] == "disputed":
                 why = f" (reviewer: {e['note']})" if e["note"] else ""
                 lines.append(f"{c['_id']}: reviewers said this was NOT a breach: \"{e['quote']}\"{why}")

@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from _core import auth, db, engine, evaluation, learning, llm, rulebook, workflow, workspace  # noqa: E402
+from _core import auth, db, engine, evaluation, gaps, learning, llm, rulebook, versions, workflow, workspace  # noqa: E402
 from _core.demo_data import CHANNELS  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
 from _core.regional import REGIONAL  # noqa: E402
@@ -258,10 +258,10 @@ def get_rulebook(brand_id: Optional[str] = None, user=Depends(auth.current)):
 
 
 class ClauseIn(BaseModel):
-    title: Optional[str] = None
-    text: Optional[str] = None
-    kind: Optional[str] = None
-    status: Optional[str] = None
+    title: Optional[str] = Field(None, max_length=200)
+    text: Optional[str] = Field(None, max_length=2000)
+    kind: Optional[str] = Field(None, pattern="^(exact|judgement)$")
+    status: Optional[str] = Field(None, pattern="^(confirmed|draft)$")
 
 
 @app.patch("/api/clauses/{clause_id}")
@@ -270,36 +270,49 @@ def edit_clause(clause_id: str, body: ClauseIn, user=Depends(auth.current)):
     c = db.one("SELECT * FROM clauses WHERE id = ? AND org_id = ?", (clause_id, user["org_id"]))
     if not c:
         raise HTTPException(404, "Clause not found")
+    if body.text is not None and not body.text.strip():
+        raise HTTPException(400, "A guideline can't be empty.")
+    versions.ensure_initial(user["org_id"], c["brand_id"])
+    changed = False
     for field in ("title", "text", "kind", "status"):
         val = getattr(body, field)
-        if val is not None:
+        if val is not None and val != c.get(field):
             db.exec(f"UPDATE clauses SET {field} = ?, embedding = NULL WHERE id = ?", (val, clause_id))
-    db.exec("UPDATE brands SET rulebook_version = rulebook_version + 1 WHERE id = ?", (c["brand_id"],))
-    return {"ok": True}
+            changed = True
+    if not changed:
+        return {"ok": True, "version": versions.current(user["org_id"], c["brand_id"])}
+    v = versions.save(user["org_id"], c["brand_id"], user, f"Edited guideline {c['code']}")
+    return {"ok": True, "version": v}
 
 
 @app.post("/api/rulebook/confirm-all")
 def confirm_all(brand_id: str, user=Depends(auth.current)):
     auth.require(user, "admin", "manager")
+    if not db.one("SELECT id FROM brands WHERE id = ? AND org_id = ?", (brand_id, user["org_id"])):
+        raise HTTPException(404, "Brand not found")
+    versions.ensure_initial(user["org_id"], brand_id)
     db.exec("UPDATE clauses SET status = 'confirmed' WHERE org_id = ? AND brand_id = ?", (user["org_id"], brand_id))
+    versions.save(user["org_id"], brand_id, user, "Confirmed imported guidelines")
     return {"ok": True}
 
 
 class FactIn(BaseModel):
-    fkey: str
-    value: str
-    valid_until: Optional[str] = None
-    source: Optional[str] = None
+    fkey: str = Field(..., min_length=1, max_length=200)
+    value: str = Field(..., min_length=1, max_length=500)
+    valid_until: Optional[str] = Field(None, pattern=r"^(\d{4}-\d{2}-\d{2})?$")
+    source: Optional[str] = Field(None, max_length=200)
 
 
 @app.post("/api/facts")
 def add_fact(body: FactIn, brand_id: Optional[str] = None, user=Depends(auth.current)):
     auth.require(user, "admin", "manager")
     b = brand_of(user, brand_id)
+    versions.ensure_initial(user["org_id"], b["id"])
     n = db.one("SELECT COUNT(*) AS n FROM facts WHERE brand_id = ?", (b["id"],))["n"] + 1
     db.insert("facts", {"id": db.new_id(), "org_id": user["org_id"], "brand_id": b["id"], "code": f"F{n}",
-                        "fkey": body.fkey, "value": body.value, "valid_until": body.valid_until or None,
+                        "fkey": body.fkey.strip(), "value": body.value.strip(), "valid_until": body.valid_until or None,
                         "source": body.source})
+    versions.save(user["org_id"], b["id"], user, f"Added fact F{n}: {body.fkey.strip()}")
     return {"ok": True}
 
 
@@ -318,6 +331,67 @@ def import_rulebook(body: ImportIn, user=Depends(auth.current)):
         return rulebook.import_guideline(user["org_id"], body.name, body.pdf_b64, body.text)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------- rulebook versions & guideline-gap assistant ----------------
+@app.get("/api/rulebook/versions")
+def rulebook_versions(brand_id: Optional[str] = None, user=Depends(auth.current)):
+    return versions.history(user["org_id"], brand_of(user, brand_id)["id"])
+
+
+@app.get("/api/rulebook/versions/{version}")
+def rulebook_version_diff(version: int, brand_id: Optional[str] = None, user=Depends(auth.current)):
+    d = versions.diff(user["org_id"], brand_of(user, brand_id)["id"], version)
+    if not d:
+        raise HTTPException(404, "Version not found")
+    return d
+
+
+@app.get("/api/rulebook/gaps")
+def rulebook_gaps(brand_id: Optional[str] = None, user=Depends(auth.current)):
+    b = brand_of(user, brand_id)
+    return {"candidates": gaps.candidates(user["org_id"], b["id"]), "recent": gaps.recent(user["org_id"], b["id"])}
+
+
+class SuggestIn(BaseModel):
+    code: str = Field(..., max_length=40)
+    reason: Optional[str] = Field("", max_length=300)
+    brand_id: Optional[str] = None
+
+
+@app.post("/api/rulebook/gaps/suggest")
+def rulebook_suggest(body: SuggestIn, user=Depends(auth.current)):
+    auth.require(user, "admin", "manager")
+    try:
+        return gaps.suggest(user["org_id"], brand_of(user, body.brand_id), body.code, body.reason or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+class SuggestionDecision(BaseModel):
+    approve: bool
+    text: Optional[str] = Field(None, max_length=1200)
+    do_examples: Optional[list[str]] = None
+    dont_examples: Optional[list[str]] = None
+    reset_history: bool = True
+    brand_id: Optional[str] = None
+
+
+@app.post("/api/rulebook/suggestions/{sid}/decision")
+def rulebook_suggestion_decide(sid: str, body: SuggestionDecision, user=Depends(auth.current)):
+    auth.require(user, "admin", "manager")
+    b = brand_of(user, body.brand_id)
+    if body.text is not None and not body.text.strip():
+        raise HTTPException(400, "The new wording can't be empty.")
+    try:
+        r = gaps.decide(user["org_id"], b["id"], sid, user, body.approve, body.text,
+                        [x[:200] for x in body.do_examples][:3] if body.do_examples is not None else None,
+                        [x[:200] for x in body.dont_examples][:3] if body.dont_examples is not None else None,
+                        body.reset_history)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    workflow.log(user["org_id"], None, user, "guideline_" + r["status"], f"suggestion {sid}")
+    return r
 
 
 # ---------------- insights & evaluation ----------------
