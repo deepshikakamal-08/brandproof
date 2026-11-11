@@ -336,3 +336,30 @@ h1 { font-size: 1.5rem; letter-spacing: -.01em; }
   .f-top { flex-wrap: wrap; }
 }
 .sample { text-align: left; align-items: stretch; }
+
+/* ---------- learning from reviewer decisions ---------- */
+.learn-note { display: flex; align-items: center; gap: .45rem; color: #0E6E6E; background: #E6F6F5; border-radius: 7px; padding: .3rem .6rem; margin: .4rem 0; font-size: .8rem; }
+.learn-dot { width: 7px; height: 7px; border-radius: 50%; background: #13A39E; flex: none; box-shadow: 0 0 0 3px rgba(19,163,158,.18); display: inline-block; }
+p.learn-note { background: transparent; padding: .2rem 0; }
+.hidden-box { margin-top: .8rem; border: 1px dashed #9ED9D6; border-radius: 10px; padding: .55rem .8rem; background: #F5FBFB; }
+.hidden-box summary { cursor: pointer; display: flex; align-items: center; gap: .45rem; font-size: .88rem; list-style: none; }
+.hidden-box summary::-webkit-details-marker { display: none; }
+.hidden-item { border-top: 1px solid var(--line); padding: .5rem 0; }
+.learn-why { color: #0E6E6E; margin-top: .15rem; }
+.mode { font-size: .74rem; font-weight: 700; border-radius: 6px; padding: .12rem .5rem; white-space: nowrap; }
+.mode-trusted { background: var(--ok-bg); color: var(--ok); }
+.mode-normal { background: var(--bg); color: var(--ink-2); }
+.mode-softened { background: var(--med-bg); color: var(--med); }
+.mode-muted { background: var(--high-bg); color: var(--high); }
+.mode-off { background: #EEF0F4; color: var(--ink-3); }
+.mini-track { display: inline-block; width: 64px; height: 6px; background: var(--bg); border-radius: 6px; overflow: hidden; vertical-align: middle; margin-right: .4rem; }
+.mini-track > div { height: 100%; background: var(--med); border-radius: 6px; }
+.learn-table td { vertical-align: top; }
+.learn-table .ex { margin-top: .3rem; } .learn-table .ex summary { cursor: pointer; color: var(--primary-2); }
+.learn-table .ex .disputed { color: var(--med); } .learn-table .ex .accepted { color: var(--ok); }
+.nowrap { white-space: nowrap; }
+.switch { display: inline-flex; align-items: center; gap: .5rem; font-weight: 600; font-size: .9rem; cursor: pointer; }
+.switch input { width: auto; accent-color: var(--primary); transform: scale(1.2); }
+.how-learn ol { margin: .3rem 0 0 1.1rem; padding: 0; } .how-learn li { margin: .25rem 0; }
+.exp { border-left: 4px solid #13A39E; }
+table.cmp td:nth-child(2), table.cmp td:nth-child(3) { text-align: center; } table.cmp th:nth-child(2), table.cmp th:nth-child(3) { text-align: center; }

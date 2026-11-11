@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from _core import auth, db, engine, evaluation, llm, rulebook, workflow, workspace  # noqa: E402
+from _core import auth, db, engine, evaluation, learning, llm, rulebook, workflow, workspace  # noqa: E402
 from _core.demo_data import CHANNELS  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
 
@@ -328,17 +328,79 @@ def eval_cases(user=Depends(auth.current)):
     return evaluation.case_list()
 
 
-@app.post("/api/eval/cases/{case_id}")
-def eval_case(case_id: str, user=Depends(auth.current)):
+def demo_brand(user):
     b = db.one("SELECT * FROM brands WHERE org_id = ? AND name = ? ORDER BY created_at LIMIT 1",
                (user["org_id"], "Neem & Nila Skincare"))
     if not b:
         raise HTTPException(400, "Evaluation runs on the Neem & Nila demo brand.")
     b["palette"] = db.jload(b["palette"], [])
-    r = evaluation.score_case(user["org_id"], b, case_id)
+    return b
+
+
+@app.post("/api/eval/cases/{case_id}")
+def eval_case(case_id: str, learn: int = 1, train: int = 0, user=Depends(auth.current)):
+    """learn=0 ignores reviewer history; train=1 replays the draft's labels as reviewer decisions."""
+    r = evaluation.score_case(user["org_id"], demo_brand(user), case_id, learn=bool(learn), train=bool(train))
     if not r:
         raise HTTPException(404, "Unknown case")
     return r
+
+
+@app.get("/api/eval/split")
+def eval_split(user=Depends(auth.current)):
+    return {"train": evaluation.TRAIN_IDS, "test": evaluation.TEST_IDS}
+
+
+@app.post("/api/eval/experiment/start")
+def experiment_start(user=Depends(auth.current)):
+    """Clear earlier training decisions so the experiment starts from the same point every time."""
+    learning.clear(user["org_id"], demo_brand(user)["id"], origin="calibration")
+    return {"ok": True}
+
+
+# ---------------- learning from reviewer decisions ----------------
+def _clause_texts(user, b):
+    rows = db.all("SELECT code, text FROM clauses WHERE org_id = ? AND brand_id = ?", (user["org_id"], b["id"]))
+    facts = db.all("SELECT code, fkey, value FROM facts WHERE org_id = ? AND brand_id = ?", (user["org_id"], b["id"]))
+    out = {r["code"]: r["text"] for r in rows}
+    out.update({f["code"]: f"{f['fkey']}: {f['value']}" for f in facts})
+    return out
+
+
+@app.get("/api/learning")
+def learning_view(brand_id: Optional[str] = None, user=Depends(auth.current)):
+    b = brand_of(user, brand_id)
+    return {"brand": {"id": b["id"], "name": b["name"]}, **learning.summary(user["org_id"], b["id"], _clause_texts(user, b))}
+
+
+class LearningSetting(BaseModel):
+    code: str = Field(..., max_length=40)
+    enabled: bool
+    brand_id: Optional[str] = None
+
+
+@app.post("/api/learning/settings")
+def learning_setting(body: LearningSetting, user=Depends(auth.current)):
+    auth.require(user, "admin", "manager")
+    b = brand_of(user, body.brand_id)
+    learning.set_enabled(user["org_id"], b["id"], body.code, body.enabled)
+    workflow.log(user["org_id"], None, user, "learning_" + ("on" if body.enabled else "off"),
+                 "whole brand" if body.code == "*" else f"guideline {body.code}")
+    return {"ok": True}
+
+
+class LearningReset(BaseModel):
+    code: Optional[str] = Field(None, max_length=40)
+    brand_id: Optional[str] = None
+
+
+@app.post("/api/learning/reset")
+def learning_reset(body: LearningReset, user=Depends(auth.current)):
+    auth.require(user, "admin", "manager")
+    b = brand_of(user, body.brand_id)
+    learning.clear(user["org_id"], b["id"], code=body.code)
+    workflow.log(user["org_id"], None, user, "learning_reset", f"guideline {body.code}" if body.code else "all history")
+    return {"ok": True}
 
 
 class EvalSave(BaseModel):
@@ -352,8 +414,8 @@ def eval_save(body: EvalSave, user=Depends(auth.current)):
 
 
 @app.get("/api/eval/latest")
-def eval_latest(user=Depends(auth.current)):
-    return evaluation.latest(user["org_id"])
+def eval_latest(kind: str = "eval", user=Depends(auth.current)):
+    return evaluation.latest(user["org_id"], kind)
 
 
 # ---------------- public check API ----------------

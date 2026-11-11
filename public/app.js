@@ -116,7 +116,7 @@ $("#menuBtn").addEventListener("click", () => $("#nav").classList.toggle("open")
 const routes = [
   [/^#?\/?$/, landing], [/^#\/new$/, newCheck], [/^#\/drafts$/, drafts], [/^#\/queue$/, queue],
   [/^#\/d\/([\w]+)$/, draftView], [/^#\/rulebook$/, rulebook], [/^#\/insights$/, insights],
-  [/^#\/eval$/, evaluation], [/^#\/how$/, how],
+  [/^#\/eval$/, evaluation], [/^#\/learning$/, learningPage], [/^#\/how$/, how],
 ];
 async function route() {
   const h = location.hash || "#/";
@@ -373,9 +373,20 @@ function findingsHtml(draft, check, findings, editable) {
     ${(s.verified_claims || []).length ? `<p class="verified small">✓ Verified against the fact sheet: ${s.verified_claims.map(v => `“${esc(v.quote)}” (${esc(v.cite_code)})`).join(", ")}</p>` : ""}
     ${!findings.length ? `<div class="okbox">No issues found. This content follows the rulebook.</div>` : ""}
     ${disputedFirst && findings.some(f => f.decision === "disputed" && f.severity === "high" && ["claims", "legal"].includes(f.category)) ? `<div class="warn small">A high-severity claim was disputed: a manager must add a comment to approve, or a Reviewer can approve directly.</div>` : ""}
-    <div id="flist" class="flist">${groups.filter(([, g]) => g.length).map(([label, g]) => `<div class="group-label">${label} <span>${g.length}</span></div>${g.map(([f, n]) => findingCard(f, n, editable)).join("")}`).join("")}</div>`;
+    <div id="flist" class="flist">${groups.filter(([, g]) => g.length).map(([label, g]) => `<div class="group-label">${label} <span>${g.length}</span></div>${g.map(([f, n]) => findingCard(f, n, editable, (s.learning_notes || {})[String(f.ord)])).join("")}`).join("")}</div>
+    ${hiddenHtml(s)}`;
 }
-function findingCard(f, n, editable) {
+function hiddenHtml(s) {
+  const h = s.hidden || [];
+  const L = s.learning;
+  if (!L || !L.enabled) return "";
+  if (!h.length) return L.decisions ? `<p class="learn-note small"><span class="learn-dot"></span>Learning from <b>${L.decisions}</b> past reviewer decisions · <a href="#/learning">see what it learned</a></p>` : "";
+  return `<details class="hidden-box"><summary><span class="learn-dot"></span><b>${h.length}</b> flag${h.length > 1 ? "s" : ""} hidden by learning from ${L.decisions} reviewer decisions <span class="muted">· show</span></summary>
+    ${h.map(x => `<div class="hidden-item"><div><b>${esc(CAT[x.category] || x.category)}</b> · ${x.quote && x.quote !== "[image]" ? `“${esc(x.quote)}”` : "image"} <span class="muted small">(${esc(x.cite_code || "")})</span></div>
+      <div class="small muted">${esc(x.explanation || "")}</div><div class="small learn-why">Hidden: ${esc(x.hidden_reason)}</div></div>`).join("")}
+    <p class="small muted">Hidden flags are never deleted. An admin can switch learning off for any guideline on the <a href="#/learning">Learning</a> page.</p></details>`;
+}
+function findingCard(f, n, editable, learnNote) {
   const quoteable = f.quote && f.quote !== "*" && f.quote !== "[image]";
   const fixShown = f.decision === "edited" ? f.edited_fix : f.fix_text;
   const src = f.cite_type === "fact" ? "Fact " + esc(f.cite_code) : "Guideline " + esc(f.cite_code);
@@ -384,6 +395,7 @@ function findingCard(f, n, editable) {
       <span class="f-quote">${quoteable ? `“${esc(f.quote)}”` : f.quote === "[image]" ? "In the image" : "Whole draft"}</span>
       <span class="f-tags"><span class="tag">${CAT[f.category] || f.category}</span>${f.claim_status ? `<span class="tag claim">${CLAIM[f.claim_status] || f.claim_status}</span>` : ""}${f.source === "ai" ? `<span class="tag ai" title="Found by AI; confidence ${Math.round(f.confidence * 100)}%">AI ${Math.round(f.confidence * 100)}%</span>` : `<span class="tag rule" title="Found by an exact rule">Rule</span>`}</span></div>
     <div class="f-why">${esc(f.explanation)}</div>
+    ${learnNote ? `<div class="learn-note small"><span class="learn-dot"></span>${esc(learnNote)}</div>` : ""}
     <div class="f-cite ${f.cite_type === "fact" ? "fact" : ""}" data-toggle><b>${src}</b> ${esc(f.cite_text)}</div>
     ${fixShown != null && quoteable ? `<div class="f-fix"><span class="diff-del">${esc(f.quote)}</span><span class="arrow">→</span>${fixShown === "" ? '<span class="muted">remove</span>' : `<span class="diff-ins">${esc(fixShown)}</span>`}</div>` : ""}
     ${f.decision ? `<div class="f-actions"><span class="decision ${f.decision}">${{ accepted: "✓ Accepted", edited: "✓ Edited", disputed: "⚑ Disputed" }[f.decision]}</span>${f.decision_note ? `<span class="small muted">“${esc(f.decision_note)}”</span>` : ""}<span class="spacer"></span>${editable ? `<button class="btn-ghost btn-sm" data-undo="${f.id}">Undo</button>` : `<span class="small muted">by ${esc(f.decided_by)}</span>`}</div>`
@@ -550,13 +562,21 @@ async function insights() {
 /* ---------------- evaluation ---------------- */
 async function evaluation() {
   loading();
-  const [cases, last] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest")]);
+  const [cases, last, exp] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest"), api("GET", "/api/eval/latest?kind=experiment")]);
   app.innerHTML = `
   <div class="page-head"><div><h1>Evaluation</h1><p class="muted">How accurate is Brandproof? We run it on ${cases.length} labelled drafts (${cases.reduce((a, c) => a + c.expected, 0)} known issues) and measure what it catches and what it gets wrong.</p></div>
     <button class="btn-primary" id="runEval">Run evaluation now</button></div>
   <div class="panel"><p class="small muted"><b>How it's scored.</b> Each test draft was labelled by hand with the issues a careful brand reviewer would flag. A finding counts as correct if it matches a labelled issue of the same type at the same place. <b>Precision</b> = share of flags that were right (low precision means false alarms). <b>Recall</b> = share of real issues caught.</p>
     <div id="evalProgress"></div></div>
+  <div class="panel exp"><div class="iss-head"><h2>Learning experiment: does learning from reviewers cut false alarms?</h2>
+      <button class="btn-sm" id="runExp">Run experiment</button></div>
+    <p class="small muted">Fair test: Brandproof learns only from the <b>12 sample drafts</b> (their hand labels are replayed as reviewer accepts and disputes), then is measured on the <b>18 other drafts it never saw</b>, before and after learning. About 4–6 minutes with AI.</p>
+    <div id="expProgress"></div><div id="expOut">${experimentReport(exp && exp.results, exp && exp.ran_at)}</div></div>
   <div id="evalOut">${last ? evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>`;
+  $("#runExp").onclick = e => busy(e.currentTarget, async () => {
+    const r = await runExperiment(cases, $("#expProgress"));
+    $("#expOut").innerHTML = experimentReport(r, new Date().toISOString()); enter($("#expOut"));
+  }, "Running…");
   $("#runEval").onclick = e => busy(e.currentTarget, async () => {
     const results = []; const prog = $("#evalProgress");
     for (let k = 0; k < cases.length; k++) {
@@ -594,6 +614,109 @@ function evalReport(res, at) {
     <div class="panel"><h2>Per draft</h2><table><thead><tr><th>Draft</th><th>Caught</th><th>Missed</th><th>False</th></tr></thead><tbody>
       ${cases.map(c => `<tr><td>${esc(c.title)}${c.missed?.length ? `<div class="muted small">Missed: ${c.missed.map(m => `${CAT[m.category] || m.category} ${m.quote === "*" ? "(whole draft)" : `“${esc(m.quote)}”`}`).join("; ")}</div>` : ""}${c.error ? `<div class="bad small">${esc(c.error)}</div>` : ""}</td><td>${c.tp}</td><td class="${c.fn ? "bad" : ""}">${c.fn}</td><td class="${c.fp ? "bad" : ""}">${c.fp}</td></tr>`).join("")}</tbody></table></div>
   </div>`;
+}
+
+/* ---------------- learning from reviewer decisions ---------------- */
+const MODE = {
+  trusted: ["Trusted", "Reviewers almost always accept these flags."],
+  normal: ["Normal", "Not enough history to change anything yet."],
+  softened: ["Softened", "Often disputed: findings are shown as low severity."],
+  muted: ["Muted", "AI flags for this guideline are hidden until an admin reviews it."],
+  off: ["Ignoring history", "An admin switched learning off for this guideline."],
+};
+async function learningPage() {
+  loading("Loading what Brandproof has learned…");
+  const L = await api("GET", "/api/learning?brand_id=" + (S.brandId || ""));
+  const canAdmin = ["admin", "manager"].includes(S.me.role);
+  const counts = {}; L.clauses.forEach(c => (counts[c.mode] = (counts[c.mode] || 0) + 1));
+  app.innerHTML = `
+  <div class="page-head"><div><h1>Learning</h1><p class="muted">Every <b>Accept</b>, <b>Edit</b> and <b>Dispute</b> teaches Brandproof what this brand's reviewers consider a real problem. Guidelines that are often disputed get quieter; guidelines that are always accepted stay strict.</p></div>
+    ${canAdmin ? `<label class="switch"><input type="checkbox" id="learnAll" ${L.enabled ? "checked" : ""}><span>Learning ${L.enabled ? "on" : "off"}</span></label>` : ""}</div>
+  <div class="kpis">
+    <div class="kpi"><b>${L.decisions}</b><span>decisions learned from${L.calibration_decisions ? ` (${L.reviewer_decisions} by reviewers, ${L.calibration_decisions} from labelled training drafts)` : ""}</span></div>
+    <div class="kpi"><b>${L.ai_threshold ? Math.round(L.ai_threshold * 100) + "%" : "–"}</b><span>learned minimum AI confidence${L.ai_threshold ? "" : " (needs 6+ AI decisions incl. a dispute)"}</span></div>
+    <div class="kpi"><b>${counts.softened || 0} / ${counts.muted || 0}</b><span>guidelines softened / muted</span></div>
+    <div class="kpi"><b>${counts.trusted || 0}</b><span>guidelines trusted</span></div>
+  </div>
+  <div class="panel how-learn"><h2>How it learns</h2><ol class="small">
+    <li><b>Per guideline:</b> disputed in half or more of 2+ decisions → <b>softened</b> to low severity. AI flags disputed in 75%+ of 3+ decisions → <b>muted</b>. Exact rule checks are never hidden, only softened.</li>
+    <li><b>Confidence cut-off:</b> from past AI decisions it picks the minimum confidence that keeps the most accepted flags and drops the most disputed ones.</li>
+    <li><b>Examples for the AI:</b> up to 3 recent accepted and disputed cases per guideline are added to the AI prompt, so the model follows your reviewers' judgement.</li>
+    <li><b>No repeats:</b> text that reviewers already disputed for a guideline (and never accepted) isn't flagged again.</li>
+    <li><b>Always visible:</b> hidden flags are listed under each check, and admins or managers can switch learning off for any guideline.</li></ol></div>
+  ${!L.clauses.length ? `<div class="panel empty">Nothing learned yet. Check a draft and <b>Accept</b> or <b>Dispute</b> its issues, or run the <a href="#/eval">learning experiment</a> on the Evaluation page to load 12 labelled training drafts as past decisions.</div>` : `
+  <div class="panel"><h2>What it learned, per guideline</h2>
+    <table class="learn-table"><thead><tr><th>Guideline / fact</th><th>Accepted</th><th>Disputed</th><th>Disputed share</th><th>Effect</th>${canAdmin ? "<th></th>" : ""}</tr></thead><tbody>
+    ${L.clauses.map(c => `<tr>
+      <td><b>${esc(c.code)}</b> <span class="small">${esc((c.text || "").slice(0, 90))}${(c.text || "").length > 90 ? "…" : ""}</span>
+        ${c.examples.length ? `<details class="small ex"><summary>${c.examples.length} example${c.examples.length > 1 ? "s" : ""}</summary>${c.examples.map(e => `<div class="${e.decision}">${e.decision === "disputed" ? "⚑ Disputed" : "✓ Accepted"}: “${esc(e.quote)}”${e.note ? ` <span class="muted">(${esc(e.note)})</span>` : ""}</div>`).join("")}</details>` : ""}</td>
+      <td>${c.accepted}</td><td>${c.disputed}</td>
+      <td><div class="mini-track"><div style="width:${Math.round(c.dispute_rate * 100)}%"></div></div><span class="small">${Math.round(c.dispute_rate * 100)}%</span></td>
+      <td><span class="mode mode-${c.mode}" title="${esc(MODE[c.mode][1])}">${MODE[c.mode][0]}</span></td>
+      ${canAdmin ? `<td class="nowrap"><button class="btn-ghost btn-sm" data-lt="${esc(c.code)}" data-on="${c.enabled ? 0 : 1}">${c.enabled ? "Ignore history" : "Use history"}</button><button class="btn-ghost btn-sm" data-lr="${esc(c.code)}">Reset</button></td>` : ""}
+    </tr>`).join("")}</tbody></table>
+    ${canAdmin ? "" : `<p class="small muted">Switch Role to Manager or Admin to change learning settings.</p>`}</div>`}`;
+  const after = async (fn, msg) => { try { await fn(); toast(msg); learningPage(); } catch (e) { toast(e.message, true); } };
+  const all = $("#learnAll");
+  if (all) all.onchange = () => after(() => api("POST", "/api/learning/settings", { code: "*", enabled: all.checked, brand_id: S.brandId }), all.checked ? "Learning switched on" : "Learning switched off: checks ignore past decisions");
+  app.querySelectorAll("[data-lt]").forEach(b => b.onclick = () => after(() => api("POST", "/api/learning/settings", { code: b.dataset.lt, enabled: b.dataset.on === "1", brand_id: S.brandId }), "Saved"));
+  app.querySelectorAll("[data-lr]").forEach(b => b.onclick = () => {
+    if (b.dataset.confirm !== "1") { b.dataset.confirm = "1"; b.textContent = "Confirm reset"; b.classList.add("bad"); return; }
+    after(() => api("POST", "/api/learning/reset", { code: b.dataset.lr, brand_id: S.brandId }), `History for ${b.dataset.lr} cleared`);
+  });
+}
+
+/* learning experiment: learn on 12 drafts, measure on 18 unseen drafts, before vs after */
+function metrics(cases) {
+  let tp = 0, fp = 0, fn = 0, flags = 0, hidden = 0, aiFail = 0;
+  for (const c of cases) { tp += c.tp; fp += c.fp; fn += c.fn; flags += (c.predicted || []).length; hidden += c.hidden_by_learning || 0; if (c.ai_status && c.ai_status !== "ok") aiFail++; }
+  const P = tp + fp ? tp / (tp + fp) : 1, R = tp + fn ? tp / (tp + fn) : 1;
+  return { tp, fp, fn, flags, hidden, aiFail, precision: P, recall: R, f1: P + R ? (2 * P * R) / (P + R) : 0, false_share: flags ? fp / flags : 0 };
+}
+async function pool(items, n, fn) {
+  const out = new Array(items.length); let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
+  return out;
+}
+async function runExperiment(cases, prog) {
+  const split = await api("GET", "/api/eval/split");
+  const title = id => (cases.find(c => c.id === id) || {}).title || id;
+  const one = async (id, q) => { try { return await api("POST", `/api/eval/cases/${id}?${q}`); } catch (e) { return { id, title: title(id), error: e.message, tp: 0, fp: 0, fn: (cases.find(c => c.id === id) || {}).expected || 0, predicted: [] }; } };
+  const total = split.train.length + split.test.length * 2; let done = 0;
+  const tick = label => { done++; prog.innerHTML = `<div class="progress"><div style="width:${(done / total) * 100}%"></div></div><span class="small muted">${label} (${done} of ${total})</span>`; };
+  tick("Step 1 of 3: clearing earlier training decisions"); done--;
+  await api("POST", "/api/eval/experiment/start");
+  const before = await pool(split.test, 2, async id => { const r = await one(id, "learn=0"); tick("Step 1 of 3: unseen drafts without learning"); return r; });
+  const train = await pool(split.train, 2, async id => { const r = await one(id, "learn=0&train=1"); tick("Step 2 of 3: learning from labelled training drafts"); return r; });
+  const after = await pool(split.test, 2, async id => { const r = await one(id, "learn=1"); tick("Step 3 of 3: the same unseen drafts with learning"); return r; });
+  prog.innerHTML = "";
+  const res = { kind: "experiment", train_ids: split.train, test_ids: split.test, before: metrics(before), after: metrics(after),
+    train: metrics(train), before_cases: before, after_cases: after };
+  await api("POST", "/api/eval/runs", { results: res });
+  return res;
+}
+function experimentReport(r, at) {
+  if (!r) return `<p class="muted small">Not run yet in this workspace.</p>`;
+  const b = r.before, a = r.after, pct = v => `${Math.round(v * 100)}%`;
+  const row = (label, x, y, better, isPct = true) => {
+    const d = y - x, eps = isPct ? 0.0049 : 0.5;
+    const good = better === "up" ? d > eps : d < -eps, bad = better === "up" ? d < -eps : d > eps;
+    const f = v => (isPct ? pct(v) : v);
+    return `<tr><td>${label}</td><td>${f(x)}</td><td><b>${f(y)}</b></td><td class="${good ? "good" : bad ? "bad" : "muted"}">${good ? "better" : bad ? "worse" : "same"}</td></tr>`;
+  };
+  const changed = r.before_cases.map((c, i) => [c, r.after_cases[i]]).filter(([x, y]) => y && (x.fp !== y.fp || x.tp !== y.tp));
+  return `
+  <table class="cmp"><thead><tr><th>On ${r.test_ids.length} unseen drafts</th><th>Before learning</th><th>After learning</th><th></th></tr></thead><tbody>
+    ${row("Precision (flags that were right)", b.precision, a.precision, "up")}
+    ${row("False alarms (share of flags)", b.false_share, a.false_share, "down")}
+    ${row("Recall (real issues caught)", b.recall, a.recall, "up")}
+    ${row("F1 score", b.f1, a.f1, "up")}
+    ${row("False alarms", b.fp, a.fp, "down", false)}
+    ${row("Real issues caught", b.tp, a.tp, "up", false)}
+  </tbody></table>
+  <p class="small muted">Learned from ${r.train_ids.length} labelled training drafts (${r.train.flags} flags replayed as ${r.train.flags - r.train.fp} accepts and ${r.train.fp} disputes). ${a.hidden} flags hidden by learning on the unseen drafts. Run ${ago(at)}.
+    ${b.aiFail || a.aiFail ? `<span class="bad">${b.aiFail + a.aiFail} run(s) had the AI unavailable, so results are partial.</span>` : ""}</p>
+  ${changed.length ? `<details class="small"><summary>${changed.length} draft(s) changed</summary><table><thead><tr><th>Draft</th><th>Caught before → after</th><th>False alarms before → after</th></tr></thead><tbody>${changed.map(([x, y]) => `<tr><td>${esc(x.title)}</td><td>${x.tp} → ${y.tp}</td><td>${x.fp} → ${y.fp}</td></tr>`).join("")}</tbody></table></details>` : ""}`;
 }
 
 /* ---------------- how it works ---------------- */

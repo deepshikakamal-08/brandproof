@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from . import db, llm, retrieval
+from . import db, learning, llm, retrieval
 
 try:
     from rapidfuzz import fuzz
@@ -67,24 +67,24 @@ SYSTEM = (
 )
 
 
-def _context(text, channel, brand, clauses, facts, today):
+def _context(text, channel, brand, clauses, facts, today, history=""):
     cl = "\n".join(f"{c['_id']} [{c['code']} {c['title']}] {c['text']}" for c in clauses)
     fa = "\n".join(f"{f['_id']} {f['fkey']}: {f['value']}"
                    + (f" (valid until {f['valid_until']})" if f.get("valid_until") else "") for f in facts)
     return (f"Brand: {brand['name']}. Voice: {brand['tone_summary']}\nToday's date: {today}\nChannel: {channel}\n\n"
-            f"GUIDELINE CLAUSES\n{cl}\n\n" + (f"APPROVED FACTS\n{fa}\n\n" if facts else "") +
+            f"GUIDELINE CLAUSES\n{cl}\n\n" + (f"APPROVED FACTS\n{fa}\n\n" if facts else "") + history +
             f"DRAFT\n<<<\n{text}\n>>>\n\n")
 
 
-def _issues_prompt(text, channel, brand, clauses, today):
-    return _context(text, channel, brand, clauses, [], today) + (
+def _issues_prompt(text, channel, brand, clauses, today, history=""):
+    return _context(text, channel, brand, clauses, [], today, history) + (
         "Return issues: tone, messaging, pressure tactics, competitor mentions, legal/disclosure (#ad, offer terms) "
         "and other breaches of the clauses above, each citing one C id. Ignore factual accuracy: another check does "
         "that. Keep explanations to one sentence. confidence is 0-1.")
 
 
-def _claims_prompt(text, channel, brand, clauses, facts, today):
-    return _context(text, channel, brand, clauses, facts, today) + (
+def _claims_prompt(text, channel, brand, clauses, facts, today, history=""):
+    return _context(text, channel, brand, clauses, facts, today, history) + (
         "Return claims: every factual or promotional claim in the draft (price, ingredient, percentage, result, "
         "certification, offer). status = supported if a fact backs it (cite that F id); outdated if it matches an "
         "expired fact (cite that F id); contradicted if a fact says otherwise (cite that F id); unsupported if no "
@@ -148,13 +148,25 @@ def load_rulebook(org_id, brand):
     return clauses, facts, terms
 
 
-def run_check(org_id, brand, version, channel, use_cache=True):
+def run_check(org_id, brand, version, channel, use_cache=True, learn=True):
+    """Check one version. learn=False ignores reviewer history (used for before/after evaluation)."""
+    pol = learning.policy(org_id, brand["id"], enabled=learn)
+    payload = _raw_check(org_id, brand, version, channel, use_cache, pol)
+    kept, hidden = learning.apply(payload["findings"], pol)
+    payload["findings"] = kept
+    payload["hidden"] = hidden
+    payload["learning"] = {"enabled": pol["enabled"], "decisions": pol["decisions"],
+                           "ai_threshold": pol["ai_threshold"], "hidden": len(hidden)}
+    return payload
+
+
+def _raw_check(org_id, brand, version, channel, use_cache, pol):
     t0 = time.time()
     text, image, alt = version["text"] or "", version.get("image_b64"), version.get("alt_text")
     clauses, facts, terms = load_rulebook(org_id, brand)
     status = llm.status()
     key = hashlib.sha256("|".join([text, channel, image or "", alt or "", str(date.today()),
-                                   rulebook_fingerprint(clauses, facts, terms, brand),
+                                   rulebook_fingerprint(clauses, facts, terms, brand), pol["prompt_key"],
                                    str(status["text_model"]), str(status["vision_model"])]).encode()).hexdigest()
     if use_cache:
         hit = db.one("SELECT payload FROM check_cache WHERE content_hash = ?", (key,))
@@ -183,10 +195,13 @@ def run_check(org_id, brand, version, channel, use_cache=True):
     with ThreadPoolExecutor(max_workers=3) as pool:
         if text.strip() and status["text_model"]:
             # two smaller calls in parallel answer much faster than one large one
-            jobs["issues"] = pool.submit(llm.chat_json, SYSTEM, _issues_prompt(text, channel, brand, picked, today),
+            jobs["issues"] = pool.submit(llm.chat_json, SYSTEM,
+                                         _issues_prompt(text, channel, brand, picked, today,
+                                                        learning.prompt_block(pol, picked)),
                                          ISSUES_SCHEMA, "brand_issues")
             jobs["claims"] = pool.submit(llm.chat_json, SYSTEM,
-                                         _claims_prompt(text, channel, brand, claim_clauses, fact_list, today),
+                                         _claims_prompt(text, channel, brand, claim_clauses, fact_list, today,
+                                                        learning.prompt_block(pol, claim_clauses + fact_list)),
                                          CLAIMS_SCHEMA, "brand_claims")
         if image and visual and status["vision_model"]:
             for i, c in enumerate(visual, 1):

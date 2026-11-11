@@ -7,7 +7,7 @@ os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ["SQLITE_PATH"] = os.path.join(tempfile.mkdtemp(), "test.db")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
-from _core import engine, workspace  # noqa: E402
+from _core import engine, evaluation, learning, workspace  # noqa: E402
 from _core.samples import SAMPLES  # noqa: E402
 
 org, _ = workspace.create_guest_workspace("Test", "creator")
@@ -61,6 +61,50 @@ def test_image_checks():
     assert "accessibility" in cats and "visual" in cats
     on = check("Festive glow #NeemAndNila", image=workspace.asset_b64("banner_onbrand.png"), alt="Serum on sand")
     assert not [f for f in on["findings"] if f["rule"] == "palette"]
+
+
+def test_learning_mutes_and_softens():
+    """Improvement 1: disputed AI flags are muted, disputed rule flags only softened."""
+    learning.clear(org, brand["id"])
+    text = "Hurry, only a few left. Glow Ritual Vitamin C Serum at ₹599. #NeemAndNila"
+    ai = next(f for f in check(text)["findings"] if f["source"] == "ai" and f["category"] == "tone")
+    for i in range(3):
+        learning.record(org, brand["id"], {**ai, "id": f"t{i}", "quote": f"other text {i}"}, "disputed", "fine for us")
+    r = check(text)
+    assert not [f for f in r["findings"] if f["cite_code"] == ai["cite_code"] and f["source"] == "ai"]
+    assert any(h["cite_code"] == ai["cite_code"] for h in r["hidden"]), "muted finding must be listed as hidden"
+    rule = next(f for f in check("Neem and Nila glow")["findings"] if f["source"] == "rule")
+    for i in range(3):
+        learning.record(org, brand["id"], {**rule, "id": f"r{i}"}, "disputed", "ok")
+    r2 = check("Neem and Nila glow")
+    kept = [f for f in r2["findings"] if f["cite_code"] == rule["cite_code"]]
+    assert kept and kept[0]["severity"] == "low" and kept[0]["learning"], "rule findings are softened, never hidden"
+    # switching learning off restores everything
+    learning.set_enabled(org, brand["id"], "*", False)
+    assert any(f["cite_code"] == ai["cite_code"] for f in check(text)["findings"])
+    learning.set_enabled(org, brand["id"], "*", True)
+    learning.clear(org, brand["id"])
+
+
+def test_learning_threshold_and_prompt():
+    learning.clear(org, brand["id"])
+    base = {"source": "ai", "category": "tone", "cite_code": "2.1", "quote": "x"}
+    for i, (conf, dec) in enumerate([(0.9, "accepted"), (0.85, "accepted"), (0.8, "accepted"),
+                                     (0.6, "disputed"), (0.55, "disputed"), (0.6, "disputed"), (0.95, "accepted")]):
+        learning.record(org, brand["id"], {**base, "id": f"c{i}", "confidence": conf, "quote": f"q{i}"}, dec, "")
+    pol = learning.policy(org, brand["id"])
+    assert pol["ai_threshold"] and 0.6 < pol["ai_threshold"] <= 0.8, pol["ai_threshold"]
+    block = learning.prompt_block(pol, [{"_id": "C1", "code": "2.1"}])
+    assert "REVIEWER HISTORY" in block and "C1" in block
+    learning.clear(org, brand["id"])
+
+
+def test_training_replay_records_calibration():
+    learning.clear(org, brand["id"])
+    r = evaluation.score_case(org, brand, evaluation.TRAIN_IDS[0], learn=False, train=True)
+    pol = learning.policy(org, brand["id"])
+    assert pol["calibration_decisions"] == len(r["predicted"]) > 0
+    learning.clear(org, brand["id"])
 
 
 if __name__ == "__main__":

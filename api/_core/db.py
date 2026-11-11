@@ -61,6 +61,15 @@ SCHEMA = [
         content_hash TEXT PRIMARY KEY, payload TEXT, created_at TEXT)""",
     """CREATE TABLE IF NOT EXISTS eval_runs (
         id TEXT PRIMARY KEY, org_id TEXT NOT NULL, ran_at TEXT, results TEXT)""",
+    # Reviewer decisions the checker learns from (origin: reviewer | calibration)
+    """CREATE TABLE IF NOT EXISTS feedback (
+        id TEXT PRIMARY KEY, org_id TEXT NOT NULL, brand_id TEXT NOT NULL, finding_id TEXT,
+        cite_code TEXT, source TEXT, rule TEXT, category TEXT, confidence REAL, quote TEXT,
+        decision TEXT, note TEXT, origin TEXT DEFAULT 'reviewer', created_at TEXT)""",
+    """CREATE TABLE IF NOT EXISTS learning_settings (
+        org_id TEXT NOT NULL, brand_id TEXT NOT NULL, code TEXT NOT NULL, enabled INTEGER DEFAULT 1,
+        updated_at TEXT, PRIMARY KEY (org_id, brand_id, code))""",
+    "CREATE INDEX IF NOT EXISTS ix_feedback_brand ON feedback (org_id, brand_id)",
     "CREATE INDEX IF NOT EXISTS ix_drafts_org ON drafts (org_id, status)",
     "CREATE INDEX IF NOT EXISTS ix_versions_draft ON versions (draft_id, n)",
     "CREATE INDEX IF NOT EXISTS ix_findings_check ON findings (check_id)",
@@ -116,14 +125,16 @@ def _run(q, params=()):
 
 
 def all(q, params=()):
-    cur = _run(q, params)
-    return [dict(r) for r in cur.fetchall()]
+    with _lock:  # fetch under the lock too: the connection is shared between request threads
+        cur = _run(q, params)
+        return [dict(r) for r in cur.fetchall()]
 
 
 def one(q, params=()):
-    cur = _run(q, params)
-    r = cur.fetchone()
-    return dict(r) if r else None
+    with _lock:
+        cur = _run(q, params)
+        r = cur.fetchone()
+        return dict(r) if r else None
 
 
 def exec(q, params=()):

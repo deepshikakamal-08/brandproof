@@ -1,7 +1,7 @@
 """Drafts, versions, checks, decisions and approvals, plus the audit log."""
 from fastapi import HTTPException
 
-from . import db, engine
+from . import db, engine, learning
 
 STATUSES = ["draft", "in_review", "changes_requested", "approved"]
 
@@ -55,7 +55,14 @@ def run_and_store(org_id, brand, d, user):
                          "dropped_uncited": payload["dropped_uncited"], "duration_ms": payload["duration_ms"],
                          "summary": db.jdump({"verified_claims": payload["verified_claims"],
                                               "cached": payload.get("cached", False),
-                                              "retrieved": payload.get("retrieved", [])}),
+                                              "retrieved": payload.get("retrieved", []),
+                                              "learning": payload.get("learning"),
+                                              "learning_notes": {str(i): f["learning"] for i, f in
+                                                                 enumerate(payload["findings"]) if f.get("learning")},
+                                              "hidden": [{k: h.get(k) for k in ("category", "quote", "cite_code",
+                                                                                 "explanation", "hidden_reason",
+                                                                                 "confidence", "source")}
+                                                         for h in payload.get("hidden", [])]}),
                          "ran_at": db.now()})
     rows = []
     for i, f in enumerate(payload["findings"]):
@@ -84,6 +91,10 @@ def decide(org_id, finding_id, user, decision, note, edited_fix):
         raise HTTPException(400, "Provide your edited text.")
     db.exec("UPDATE findings SET decision = ?, decision_note = ?, edited_fix = ?, decided_by = ?, decided_at = ? "
             "WHERE id = ?", (decision, note, edited_fix, user["name"], db.now(), finding_id))
+    d = db.one("SELECT d.brand_id FROM versions v JOIN drafts d ON d.id = v.draft_id WHERE v.id = ? AND v.org_id = ?",
+               (f["version_id"], org_id))
+    if d:  # every decision teaches the checker (improvement 1)
+        learning.record(org_id, d["brand_id"], f, decision, note)
     return db.one("SELECT * FROM findings WHERE id = ?", (finding_id,))
 
 
