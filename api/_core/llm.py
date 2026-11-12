@@ -233,7 +233,7 @@ def _mock(user, schema_name, image):
     if schema_name == "guideline_rewrite":
         return {"rewrite": "Don't pressure readers with 'hurry' or 'last chance' unless the offer has a stated end date.",
                 "do_examples": ["Offer ends 10 Nov.", "Available while stocks last."],
-                "dont_examples": ["Hurry, last chance!", "Only today!"], "why": "Mock: named the allowed case."}
+                "dont_examples": ["Hurry, last chance!", "Only today!"], "why": "Named the allowed case (a real end date) and added examples."}
     draft = user.split("<<<", 1)[-1].split(">>>", 1)[0].strip()
     issues, claims = [], []
     m = re.search(r"(?i)hurry[^.!]*", draft)

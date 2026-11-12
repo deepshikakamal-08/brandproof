@@ -33,7 +33,8 @@ def candidates(org_id, brand_id):
     """Guidelines that look unclear, most urgent first."""
     pol = learning.policy(org_id, brand_id)
     clauses = {c["code"]: c for c in db.all(
-        "SELECT code, title, text, kind FROM clauses WHERE org_id = ? AND brand_id = ? AND status = 'confirmed'",
+        "SELECT code, title, text, kind FROM clauses WHERE org_id = ? AND brand_id = ? AND status = 'confirmed' "
+        "AND kind = 'judgement'",  # exact rules are fixed in their settings, not by rewording
         (org_id, brand_id))}
     out = {}
     for code, h in pol["clauses"].items():
