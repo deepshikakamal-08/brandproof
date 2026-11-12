@@ -198,7 +198,7 @@ function landing() {
         <button class="btn-primary" id="startBtn">Start the demo, no sign-up →</button>
         <a class="btn" href="#/how">How it works</a>
       </div>
-      <p class="muted small">You get a private demo workspace with a fictional skincare brand and 12 sample drafts. Takes under 2 minutes.</p>
+      <p class="muted small">Your own private workspace with a fictional skincare brand and 16 samples, in English, Tamil and Hindi.</p>
     </div>
     <div class="preview-card">
       <div class="row" style="margin-bottom:.5rem"><span class="pill high">High</span><span class="pill cat">Claims</span><span class="pill rule">Rule</span></div>
@@ -692,7 +692,8 @@ async function insights() {
 /* ---------------- evaluation ---------------- */
 async function evaluation() {
   loading();
-  const [allCases, last, exp, indic] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest"), api("GET", "/api/eval/latest?kind=experiment"), api("GET", "/api/eval/latest?kind=indic")]);
+  const [allCases, lat] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest-all")]);
+  const last = lat.eval, exp = lat.experiment, indic = lat.indic;
   const cases = allCases.filter(c => c.set === "main"), icases = allCases.filter(c => c.set === "indic");
   app.innerHTML = `
   <div class="page-head"><div><h1>Evaluation</h1><p class="muted">Accuracy on ${cases.length} hand-labelled drafts (${cases.reduce((a, c) => a + c.expected, 0)} known issues). <span class="tip" title="A flag is correct if it matches a labelled issue of the same type at the same place. Precision = share of flags that were right. Recall = share of real issues caught.">How it's scored</span></p></div>
@@ -755,23 +756,25 @@ function evalReport(res, at, byLang) {
   const P = (a, b) => (a + b ? (100 * a) / (a + b) : 100);
   const fmt = v => `${v.toFixed(0)}%`;
   const pr = P(tp, fp), rc = P(tp, fn), f1 = pr + rc ? (2 * pr * rc) / (pr + rc) : 0;
+  const errs = cases.filter(c => c.error);
   return `
   <div class="kpis">
-    <div class="kpi"><b class="score">${fmt(pr)}</b><span>precision (flags that were right)</span></div>
-    <div class="kpi"><b class="score">${fmt(rc)}</b><span>recall (real issues caught)</span></div>
+    <div class="kpi"><b class="score">${fmt(pr)}</b><span title="Share of flags that were right">Precision</span></div>
+    <div class="kpi"><b class="score">${fmt(rc)}</b><span title="Share of real issues caught">Recall</span></div>
     <div class="kpi"><b class="score">${fmt(f1)}</b><span>F1 score</span></div>
-    <div class="kpi"><b>${dropped}</b><span>uncited AI flags blocked by the gate</span></div>
+    <div class="kpi"><b>${dropped}</b><span title="AI flags thrown away because they didn't cite a real clause or fact">Uncited AI flags blocked</span></div>
   </div>
   ${aiFail ? `<div class="warn">${aiFail} case(s) ran without AI (provider unavailable), so tone, legal and fact checks are under-counted.</div>` : ""}
-  <div class="grid-2">
+  ${errs.length ? `<div class="warn">${errs.length} case(s) could not run (${esc(errs[0].error)}). Their issues count as missed, so recall is lower than it should be. Run again in a minute.</div>` : ""}
+  <div class="${byLang ? "grid-2" : ""}">
     ${byLang ? `<div class="panel"><h2>By language</h2><table><thead><tr><th>Language</th><th>Drafts</th><th>Precision</th><th>Recall</th><th>Caught</th><th>Missed</th><th>False alarms</th></tr></thead><tbody>
       ${Object.entries(cases.reduce((m, c) => { const x = (m[c.lang || "Other"] = m[c.lang || "Other"] || { n: 0, tp: 0, fp: 0, fn: 0 }); x.n++; x.tp += c.tp; x.fp += c.fp; x.fn += c.fn; return m; }, {})).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${fmt(P(v.tp, v.fp))}</td><td>${fmt(P(v.tp, v.fn))}</td><td>${v.tp}</td><td>${v.fn}</td><td>${v.fp}</td></tr>`).join("")}</tbody></table></div>` : ""}
     <div class="panel"><h2>By issue type</h2><table><thead><tr><th>Type</th><th>Precision</th><th>Recall</th><th>Caught</th><th>Missed</th><th>False alarms</th></tr></thead><tbody>
       ${Object.entries(cats).sort().map(([k, v]) => `<tr><td>${CAT[k] || k}</td><td>${fmt(P(v.tp, v.fp))}</td><td>${fmt(P(v.tp, v.fn))}</td><td>${v.tp}</td><td>${v.fn}</td><td>${v.fp}</td></tr>`).join("")}</tbody></table>
       <p class="muted small">Run ${ago(at)} on ${cases.length} drafts.</p></div>
-    <div class="panel"><h2>Per draft</h2><table><thead><tr><th>Draft</th><th>Caught</th><th>Missed</th><th>False</th></tr></thead><tbody>
-      ${cases.map(c => `<tr><td>${esc(c.title)}${c.missed?.length ? `<div class="muted small">Missed: ${c.missed.map(m => `${CAT[m.category] || m.category} ${m.quote === "*" ? "(whole draft)" : `“${esc(m.quote)}”`}`).join("; ")}</div>` : ""}${(c.predicted || []).some(p => !p.correct) ? `<div class="small fa">False alarms: ${c.predicted.filter(p => !p.correct).map(p => `${CAT[p.category] || p.category} ${p.quote === "[image]" ? "(image)" : `“${esc(p.quote)}”`} <span class="muted">(${esc(p.cite_code || "")}, ${p.source === "ai" ? "AI " + Math.round((p.confidence || 0) * 100) + "%" : "rule"})</span>`).join("; ")}</div>` : ""}${c.error ? `<div class="bad small">${esc(c.error)}</div>` : ""}</td><td>${c.tp}</td><td class="${c.fn ? "bad" : ""}">${c.fn}</td><td class="${c.fp ? "bad" : ""}">${c.fp}</td></tr>`).join("")}</tbody></table></div>
-  </div>`;
+  </div>
+  <details class="panel per-draft"><summary><b>Per-draft results</b> <span class="muted small">· misses and false alarms</span></summary><table><thead><tr><th>Draft</th><th>Caught</th><th>Missed</th><th>False</th></tr></thead><tbody>
+      ${cases.map(c => `<tr><td>${esc(c.title)}${c.missed?.length ? `<div class="muted small">Missed: ${c.missed.map(m => `${CAT[m.category] || m.category} ${m.quote === "*" ? "(whole draft)" : `“${esc(m.quote)}”`}`).join("; ")}</div>` : ""}${(c.predicted || []).some(p => !p.correct) ? `<div class="small fa">False alarms: ${c.predicted.filter(p => !p.correct).map(p => `${CAT[p.category] || p.category} ${p.quote === "[image]" ? "(image)" : `“${esc(p.quote)}”`} <span class="muted">(${esc(p.cite_code || "")}, ${p.source === "ai" ? "AI " + Math.round((p.confidence || 0) * 100) + "%" : "rule"})</span>`).join("; ")}</div>` : ""}${c.error ? `<div class="bad small">${esc(c.error)}</div>` : ""}</td><td>${c.tp}</td><td class="${c.fn ? "bad" : ""}">${c.fn}</td><td class="${c.fp ? "bad" : ""}">${c.fp}</td></tr>`).join("")}</tbody></table></details>`;
 }
 
 /* ---------------- learning from reviewer decisions ---------------- */
@@ -881,7 +884,8 @@ function experimentReport(r, at) {
     ${row("Real issues caught", b.tp, a.tp, "up", false)}
   </tbody></table>
   <p class="small muted">Learned from ${r.train_ids.length} labelled training drafts (${r.train.flags} flags replayed as ${r.train.flags - r.train.fp} accepts and ${r.train.fp} disputes). ${a.hidden} flags hidden by learning on the unseen drafts. Run ${ago(at)}.
-    ${b.aiFail || a.aiFail ? `<span class="bad">${b.aiFail + a.aiFail} run(s) had the AI unavailable, so results are partial.</span>` : ""}</p>
+    ${b.aiFail || a.aiFail ? `<span class="bad">${b.aiFail + a.aiFail} run(s) had the AI unavailable, so results are partial.</span>` : ""}
+    ${[...r.before_cases, ...r.after_cases].some(c => c.error) ? `<span class="bad">${[...r.before_cases, ...r.after_cases].filter(c => c.error).length} run(s) failed (${esc([...r.before_cases, ...r.after_cases].find(c => c.error).error)}); run the experiment again.</span>` : ""}</p>
   ${changed.length ? `<details class="small"><summary>${changed.length} draft(s) changed</summary><table><thead><tr><th>Draft</th><th>Caught before → after</th><th>False alarms before → after</th></tr></thead><tbody>${changed.map(([x, y]) => `<tr><td>${esc(x.title)}</td><td>${x.tp} → ${y.tp}</td><td>${x.fp} → ${y.fp}</td></tr>`).join("")}</tbody></table></details>` : ""}`;
 }
 

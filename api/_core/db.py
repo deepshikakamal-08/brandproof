@@ -111,12 +111,42 @@ def _connect():
     return c
 
 
+SCHEMA_VERSION = None
+STATS = {"queries": 0}
+
+
+def _ensure_schema(c):
+    """Create tables only when the schema changed: one quick check per cold start instead of
+    ~35 round trips to the database (this was most of the first-page delay)."""
+    import hashlib
+    global SCHEMA_VERSION
+    SCHEMA_VERSION = hashlib.sha256("\n".join(SCHEMA).encode()).hexdigest()[:16]
+    try:
+        r = c.execute("SELECT version FROM schema_meta").fetchone()
+        if r and (r["version"] if not isinstance(r, tuple) else r[0]) == SCHEMA_VERSION:
+            return
+    except Exception:
+        if IS_PG:
+            pass  # table missing: create everything below
+    if IS_PG:
+        try:
+            c.execute(";\n".join(SCHEMA))  # one round trip
+        except Exception:
+            for stmt in SCHEMA:  # fall back to one statement at a time
+                c.execute(stmt)
+    else:
+        for stmt in SCHEMA:
+            c.execute(stmt)
+    c.execute("CREATE TABLE IF NOT EXISTS schema_meta (version TEXT)")
+    c.execute("DELETE FROM schema_meta")
+    c.execute(_sql("INSERT INTO schema_meta (version) VALUES (?)"), (SCHEMA_VERSION,))
+
+
 def conn():
     global _conn
     if _conn is None:
         _conn = _connect()
-        for stmt in SCHEMA:
-            _conn.execute(stmt)
+        _ensure_schema(_conn)
     return _conn
 
 
@@ -127,6 +157,7 @@ def _sql(q):
 def _run(q, params=()):
     global _conn
     with _lock:
+        STATS["queries"] += 1
         try:
             return conn().execute(_sql(q), params)
         except Exception as e:  # reconnect once on dropped serverless connections

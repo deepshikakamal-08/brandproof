@@ -86,6 +86,19 @@ def save_run(org_id, results):
     db.insert("eval_runs", {"id": db.new_id(), "org_id": org_id, "ran_at": db.now(), "results": db.jdump(results)})
 
 
+def latest_all(org_id):
+    out = {"eval": None, "experiment": None, "indic": None}
+    for org in (org_id, "published"):
+        if all(out.values()):
+            break
+        for r in db.all("SELECT * FROM eval_runs WHERE org_id = ? ORDER BY ran_at DESC LIMIT 12", (org,)):
+            res = db.jload(r["results"], {})
+            k = res.get("kind", "eval")
+            if k in out and out[k] is None:
+                out[k] = {**r, "results": res}
+    return out
+
+
 def latest(org_id, kind="eval"):
     """Latest saved run of this kind ("eval" or "experiment"); falls back to the published copy."""
     for org in (org_id, "published"):

@@ -48,9 +48,24 @@ class DemoIn(BaseModel):
     role: str = "creator"
 
 
+@app.middleware("http")
+async def timing(request: Request, call_next):
+    """Server-Timing header on every API call (visible in the browser's network tab)."""
+    import time as _t
+    t0, q0 = _t.time(), db.STATS["queries"]
+    resp = await call_next(request)
+    resp.headers["Server-Timing"] = f"app;dur={(_t.time() - t0) * 1000:.0f};desc=\"{db.STATS['queries'] - q0} queries\""
+    return resp
+
+
 @app.get("/api/health")
 def health(probe: int = 0):
-    out = {"ok": True, "db": "postgres" if db.IS_PG else "sqlite", **llm.status()}
+    import time as _t
+    t0 = _t.time()
+    for _ in range(3):
+        db.one("SELECT 1 AS one")
+    out = {"ok": True, "db": "postgres" if db.IS_PG else "sqlite", "region": os.getenv("VERCEL_REGION", "local"),
+           "db_roundtrip_ms": round((_t.time() - t0) * 1000 / 3, 1), **llm.status()}
     if probe:
         out["probe"] = llm.probe()
     return out
@@ -457,7 +472,7 @@ def demo_brand(user):
 @app.post("/api/eval/cases/{case_id}")
 def eval_case(case_id: str, learn: int = 1, train: int = 0, user=Depends(auth.current)):
     """learn=0 ignores reviewer history; train=1 replays the draft's labels as reviewer decisions."""
-    rate_limit("eval:" + user["org_id"], 160, 1800, "evaluation checks")
+    rate_limit("eval:" + user["org_id"], 500, 3600, "evaluation checks")  # a full set of runs is ~150 calls
     r = evaluation.score_case(user["org_id"], demo_brand(user), case_id, learn=bool(learn), train=bool(train))
     if not r:
         raise HTTPException(404, "Unknown case")
@@ -551,6 +566,12 @@ def eval_publish(body: PublishIn, user=Depends(auth.current)):
             evaluation.save_run("published", {**r["results"], "published_from": r["ran_at"]})
             done.append(kind)
     return {"published": done}
+
+
+@app.get("/api/eval/latest-all")
+def eval_latest_all(user=Depends(auth.current)):
+    """All three result sets in one call (the Evaluation page used to make three)."""
+    return evaluation.latest_all(user["org_id"])
 
 
 @app.get("/api/eval/latest")
