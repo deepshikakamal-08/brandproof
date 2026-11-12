@@ -187,7 +187,11 @@ def _raw_check(org_id, brand, version, channel, use_cache, pol):
     text, image, alt = version["text"] or "", version.get("image_b64"), version.get("alt_text")
     clauses, facts, terms = load_rulebook(org_id, brand)
     status = llm.status()
-    key = hashlib.sha256("|".join([text, channel, image or "", alt or "", str(date.today()),
+    # The date only matters through which facts have expired, so results stay cached across days
+    # until a fact expires (a judge clicking a sample then needs no AI call at all).
+    today = str(date.today())
+    expired = ",".join(sorted(f["code"] for f in facts if f.get("valid_until") and str(f["valid_until"]) < today))
+    key = hashlib.sha256("|".join([text, channel, image or "", alt or "", "expired:" + expired,
                                    rulebook_fingerprint(clauses, facts, terms, brand), pol["prompt_key"],
                                    str(status["text_model"]), str(status["vision_model"])]).encode()).hexdigest()
     if use_cache:

@@ -12,8 +12,8 @@ import time
 TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))           # primary provider
 FALLBACK_TIMEOUT = float(os.getenv("LLM_FALLBACK_TIMEOUT", "30"))
 BUDGET = float(os.getenv("LLM_BUDGET", "90"))             # whole call, all providers
-FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "gemini_backup", "openai_compat"]
-VISION_ORDER = ["gemini", "gemini_backup", "sarvam_flash", "openai_compat"]
+FALLBACK_ORDER = ["sarvam", "sarvam_flash", "gemini", "openai_compat"]
+VISION_ORDER = ["gemini", "sarvam_flash", "openai_compat"]
 DEAD_FOR = 600  # seconds to skip a provider after "no credits" / bad key
 _DEAD = {}
 
@@ -33,18 +33,23 @@ PROVIDERS = {
         "key": "GEMINI_API_KEY",
         "model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip(),
     },
-    # A second Gemini model with its own free quota, used when the first is rate-limited (429).
-    "gemini_backup": {
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" if os.getenv("GEMINI_BACKUP_MODEL") else "",
-        "key": "GEMINI_API_KEY",
-        "model": os.getenv("GEMINI_BACKUP_MODEL", "").strip(),
-    },
     "openai_compat": {
         "url": os.getenv("OPENAI_COMPAT_URL", ""),
         "key": "OPENAI_COMPAT_KEY",
         "model": os.getenv("OPENAI_COMPAT_MODEL", ""),
     },
 }
+
+
+# Backup Gemini models, each with its own free quota, used in turn when the main one is
+# rate-limited (429). GEMINI_BACKUP_MODEL may list several, comma-separated.
+_GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+_BACKUPS = [m.strip() for m in os.getenv("GEMINI_BACKUP_MODEL", "").split(",") if m.strip()][:5]
+for _i, _m in enumerate(_BACKUPS):
+    _name = "gemini_backup" if _i == 0 else f"gemini_backup{_i + 1}"
+    PROVIDERS[_name] = {"url": _GEMINI_URL, "key": "GEMINI_API_KEY", "model": _m}
+    FALLBACK_ORDER.insert(FALLBACK_ORDER.index("openai_compat"), _name)
+    VISION_ORDER.insert(VISION_ORDER.index("sarvam_flash"), _name)
 
 
 def text_provider():
@@ -188,7 +193,7 @@ def chat_json(system, user, schema, schema_name="result", vision_image=None):
     deadline = time.time() + BUDGET
     errors = []
     start = time.time()
-    for i, (name, p) in enumerate(cands[:4]):
+    for i, (name, p) in enumerate(cands[:7]):
         left = deadline - time.time()
         if left < 8:
             break
