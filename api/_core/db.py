@@ -70,6 +70,8 @@ SCHEMA = [
         org_id TEXT NOT NULL, brand_id TEXT NOT NULL, code TEXT NOT NULL, enabled INTEGER DEFAULT 1,
         updated_at TEXT, PRIMARY KEY (org_id, brand_id, code))""",
     "CREATE INDEX IF NOT EXISTS ix_feedback_brand ON feedback (org_id, brand_id)",
+    "CREATE TABLE IF NOT EXISTS rate_events (rkey TEXT NOT NULL, at REAL NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS ix_rate_events ON rate_events (rkey, at)",
     # Rulebook history (improvement 3): a snapshot per change, so every check names the version it used
     """CREATE TABLE IF NOT EXISTS rulebook_versions (
         id TEXT PRIMARY KEY, org_id TEXT NOT NULL, brand_id TEXT NOT NULL, version INTEGER, note TEXT,
@@ -101,7 +103,8 @@ def _connect():
         from psycopg.rows import dict_row
         return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True,
                                prepare_threshold=None, connect_timeout=10)
-    path = os.getenv("SQLITE_PATH", "/tmp/brandproof.db")
+    import tempfile
+    path = os.getenv("SQLITE_PATH") or os.path.join(tempfile.gettempdir(), "brandproof.db")  # works on Windows too
     c = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")

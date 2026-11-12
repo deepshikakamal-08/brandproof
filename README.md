@@ -1,123 +1,153 @@
 # Brandproof
 
-**Brand governance before publication.** Brandproof checks posts, emails, blogs, PDFs and images against an organisation's own brand guidelines, approved facts, terminology and assets. Every issue is explained, cites the exact guideline clause or approved fact it breaks, and comes with a minimal fix. A person makes the final decision.
+**Brand governance before publication.** Brandproof checks social posts, emails, blogs, press notes, PDFs and images against an organisation's own brand guidelines, approved facts, terminology and assets, in English, Tamil, Hindi, Tanglish and Hinglish. Every issue is explained, cites the exact guideline clause or approved fact it breaks, and comes with a minimal fix. A person makes the final decision, and the system learns from those decisions.
 
-Built for the We Code Coders CodeNexus hackathon (Inkloom AI problem statement), Round 2.
+Built for the We Code Coders CodeNexus India hackathon (Inkloom AI problem statement) by team **Zero Downtime**.
 
-**Live demo:** `<your-vercel-url>` (no sign-up: click **Start the demo**)
-**API docs:** `<your-vercel-url>/api/docs`
+- **Live product:** https://brandproof-opal.vercel.app (no sign-up: click **Start the demo**)
+- **API docs:** https://brandproof-opal.vercel.app/api/docs
+- **Health check:** https://brandproof-opal.vercel.app/api/health (add `?probe=1` to test each AI provider)
 
 ---
 
-## Try it in 2 minutes (judge path)
+## Try it in 3 minutes
 
-1. Open the link and click **Start the demo, no sign-up**. You get a private workspace with the fictional brand *Neem & Nila Skincare*.
-2. Pick the sample **Diwali glow serum — Instagram** (or paste your own text, upload an image or a PDF).
-3. Read the issues: each one shows the quote, why it's a problem, the cited guideline clause or approved fact, and a suggested fix. Claims are labelled Supported / Outdated / Contradicted / Unsupported against the fact sheet.
-4. **Accept**, **Edit** or **Dispute** each issue (or *Accept all remaining fixes*), then **Submit for review**.
-5. Switch **Role** (top right) to **Manager**, open the draft, see the final text, the diff and any disputes, then **Approve** or **Send back** with a comment.
-6. Also explore **Rulebook** (import any guideline PDF), **Insights**, **Evaluation** (accuracy numbers) and **How it works**.
+A **Try this** button (bottom right) ticks these off as you go.
 
-## What's built (Round 2)
+1. Open the link and click **Start the demo, no sign-up**. You get your own private workspace with the fictional brand *Neem & Nila Skincare*.
+2. **New check →** pick a sample (English, or **Tamil & Hindi**), or paste your own text, upload an image or a PDF.
+3. Read the issues: highlighted text, why it breaks the rule, the cited clause or fact, and a fix. Claims are marked Supported / Outdated / Contradicted / Unsupported against the fact sheet.
+4. **Accept**, **Edit** or **Dispute** each issue (or *Accept all fixes*), then **Submit for review**.
+5. Switch **Role** (top right) to **Manager**, open **Review queue**, then **Approve** or **Send back** with a comment.
+6. Explore **Learning** (what it learned from decisions), **Rulebook** (guideline gaps, version history, PDF import as Admin), **Evaluation** (accuracy numbers) and **Insights**.
 
-| Area | Feature |
+## Features
+
+| Area | What works |
 | --- | --- |
-| Workspace | One-click guest workspace per visitor, signed sessions, every query scoped to the organisation; roles: creator, manager, reviewer, admin |
-| Rulebook | 25 clauses, 13 approved facts (incl. an expired price), 24 terms, colour palette; edit clauses; add facts; **import any guideline PDF or text into rule cards** (AI classifies each clause as exact or AI-judged and extracts terms) |
-| Intake | Paste text, upload an image (with alt text) or a PDF; 6 channels with channel-specific rules; 12 sample drafts |
-| Exact checks (code) | Brand and product names, banned and inclusive-language terms, Indian English spelling, risky claim words, medical/cure claims, emoji per channel, readability, ALL CAPS, exclamation marks, hashtags, alt text, image colours vs palette (k-means in Lab colour space) |
-| AI checks | Tone, messaging, false urgency, competitor mentions, legal disclosure (#ad, offer terms), claim-vs-fact verification, visual rules on images (logo, retouching, text contrast) |
-| Citation gate | An AI finding is kept only if it cites a clause/fact that was actually provided **and** quotes text that really appears in the draft; the rest are discarded and counted |
-| Explain + fix | Highlighted text, severity, confidence, Rule/AI label with model name, cited source, minimal fix as a diff; intent check drops fixes that rewrite too much |
-| Workflow | Accept / edit / dispute with notes; submit only when every issue is decided; fixes applied into a new version; manager approve / send back with comment; disputed high-severity claims need a justification; versions, comments, full audit log |
-| Insights | Issues by type, most-broken guidelines, **possibly unclear guidelines** (clauses disputed often), rule vs AI counts |
-| Evaluation | 30 hand-labelled drafts (74 known issues); precision / recall / F1 overall and per issue type, per-draft misses and false alarms |
-| API | `POST /api/v1/check` stateless check for integrations; OpenAPI docs at `/api/docs` |
-| Reliability | AI timeouts + retry, results cached by content hash, rules still return if AI fails, friendly errors |
+| Workspace | One-click guest workspace per visitor; signed sessions; every query scoped to the organisation; roles creator / manager / reviewer / admin |
+| Rulebook | 25 clauses, 13 approved facts (incl. an expired price and an expired offer), 24 terms, colour palette; edit clauses, add facts; **import any guideline PDF or text** into rule cards |
+| Intake | Paste text (any language), upload an image with alt text, or a PDF; 6 channels with channel rules; 16 samples |
+| Exact checks | Brand and product names, banned and inclusive-language terms, Indian English spelling, absolute and medical claims, emoji per channel, readability (English), ALL CAPS, exclamation marks, hashtags, alt text, image colours vs palette (k-means in Lab colour space) |
+| AI checks | Tone, messaging, false urgency, competitor mentions, legal disclosure (#ad, offer terms), claims vs approved facts (with validity dates), image review against visual rules |
+| Citation gate | An AI finding is kept only if it cites a clause or fact that was given to the model **and** quotes text that really is in the draft; the finding type follows the cited clause; AI repeats of rule flags are dropped |
+| Fixes | Minimal fixes shown as a diff; long rewrites rejected; accepted fixes applied into a new version |
+| Workflow | Accept / edit / dispute with notes; submit only when all issues are decided; manager approve / send back; disputed high-severity claims need a justification; versions, comments, audit log |
+| **Learning** (Round 3) | Every decision is stored; per-guideline modes (trusted / normal / softened / muted); learned AI confidence cut-off; real accepted and disputed examples added to the AI prompt; disputed text not re-flagged; hidden flags always listed with the reason; admins can switch learning off or reset per guideline |
+| **Indian languages** (Round 3) | Detects English, Tamil, Hindi, Tanglish, Hinglish; exact Tamil/Hindi/romanised checks for medical and absolute claims, fair-skin language, shaming words and the brand name in another script; fixes in the same language and script; AI quotes in the original script and adds the English meaning |
+| **Guideline gaps + versions** (Round 3) | Finds often-disputed or low-confidence guidelines; suggests a clearer rewrite with do/don't examples (AI, or drafted from reviewer decisions if the AI is down); admin edits, approves or rejects; every rulebook change saves a numbered version with a diff; every check records the version it used |
+| Evaluation | 30 hand-labelled English drafts and 20 Tamil/Hindi/Tanglish/Hinglish drafts; precision, recall, F1 per issue type and language; every miss and false alarm listed; learning experiment (learn on 12, test on 18 unseen, before vs after); results can be published for all visitors |
+| Insights | Issues by type, most-broken guidelines, possibly unclear guidelines, rule vs AI counts |
+| API | `POST /api/v1/check` stateless check; OpenAPI docs at `/api/docs` |
+| Reliability | AI timeouts, retry, provider fallback (skips providers with no credits; backup model on rate limits), cached results, exact checks always return, rate limits, input validation, friendly errors, works with browser storage blocked |
 
 ## Architecture
 
 ```
-Web app (HTML/CSS/JS)   Public API (/api/v1/check)
-            \                 /
-        FastAPI on Vercel (Python function)
-        signed sessions · org scoping · roles
-                     |
-   Check engine: exact rules -> retrieval (BM25 + embeddings)
-   -> AI judgement + claim check (structured JSON) -> citation gate
-   -> minimal fix + intent check -> findings with source + confidence
-   Rulebook · Workflow · Insights · Evaluation
-          |                              |
- Supabase Postgres                 AI gateway: PII redaction, retries,
- (org data, audit log, cache)      Sarvam sarvam-105b (text), Gemini (vision, embeddings)
+ Web app (HTML/CSS/JS)          Public API  POST /api/v1/check
+                \                    /
+          FastAPI on Vercel (Python function, Mumbai region)
+          signed sessions · org scoping · roles · rate limits
+                           |
+  Check engine
+   1 language detection (en / ta / hi / Tanglish / Hinglish)
+   2 exact rules (code)  ->  3 retrieval (BM25 + embeddings, rank fusion)
+   4 two AI calls in parallel, JSON schema: issues | claims vs facts
+     (+ reviewer examples from Learning, + language guidance)
+   5 citation gate  ->  6 minimal fix  ->  7 learning policy (soften / mute / cut-off)
+  Rulebook + versions · Gap assistant · Workflow · Learning · Insights · Evaluation
+           |                                   |
+  Supabase Postgres                     AI gateway
+  (orgs, drafts, versions, findings,    PII redaction · timeouts · retry · fallback
+   feedback, rulebook versions,         Gemini 3.5 Flash Lite (+ backup model), Sarvam,
+   audit log, cache, rate limits)       any OpenAI-compatible model; Gemini embeddings
 ```
-
-Code map:
 
 | Path | What |
 | --- | --- |
-| `api/index.py` | All HTTP routes |
-| `api/_core/rules.py` | Exact checks |
+| `api/index.py` | All HTTP routes, rate limits, input validation |
 | `api/_core/engine.py` | Check pipeline, citation gate, fixes, caching |
-| `api/_core/llm.py` | AI gateway (providers, redaction, retries, structured output) |
-| `api/_core/retrieval.py` | BM25 + embedding retrieval with rank fusion |
+| `api/_core/rules.py` | Exact checks |
+| `api/_core/lang.py` | Language detection, Tamil/Hindi checks, language prompt |
+| `api/_core/learning.py` | Learning from reviewer decisions |
+| `api/_core/gaps.py`, `versions.py` | Guideline-gap assistant, rulebook versions |
+| `api/_core/llm.py` | AI gateway |
+| `api/_core/retrieval.py` | BM25 + embedding retrieval |
 | `api/_core/rulebook.py` | Guideline PDF import |
 | `api/_core/workflow.py` | Drafts, versions, decisions, approvals, insights |
-| `api/_core/evaluation.py`, `samples.py` | Labelled test set and scoring |
-| `api/_core/demo_data.py` | Demo brand rulebook, facts, terms |
-| `public/` | Web app |
+| `api/_core/evaluation.py`, `samples.py`, `regional.py` | Labelled test sets and scoring |
+| `api/_core/demo_data.py` | Demo brand rulebook |
+| `public/` | Web app (no build step) |
+| `tests/test_engine.py` | Offline tests (no keys needed) |
 
-## Models, APIs and libraries
+## Models and libraries
 
-- **Sarvam AI `sarvam-105b`** (chat completions, JSON-schema structured output): tone, claims, legal checks and guideline import.
-- **Google Gemini** (OpenAI-compatible endpoint): vision checks on images (`gemini-3.8-flash`) and embeddings (`gemini-embedding-001`) for retrieval. Optional: without a key, retrieval falls back to BM25 and image checks to code-only palette and alt-text checks.
-- **Supabase Postgres** for storage.
-- Python: FastAPI, Pydantic, httpx, psycopg 3, rapidfuzz, NumPy, Pillow, PyMuPDF.
-- No external front-end libraries.
+- **Google Gemini** via the OpenAI-compatible endpoint: text and image review (`gemini-3.5-flash-lite`, backup `gemini-3.1-flash-lite`), embeddings (`gemini-embedding-001`).
+- **Sarvam AI** (`sarvam-105b`, `glm5.3-flash`): supported and used during development; set `LLM_PROVIDER=sarvam` when the account has credits.
+- Any OpenAI-compatible model via `OPENAI_COMPAT_URL`, `OPENAI_COMPAT_KEY`, `OPENAI_COMPAT_MODEL`.
+- Python: FastAPI, Pydantic, httpx, psycopg 3, rapidfuzz, NumPy, Pillow, PyMuPDF. No front-end libraries.
 
-**AI disclosure:** AI coding assistants (Claude) were used to help write this code. Every AI finding inside the product is labelled with the model that produced it.
+Without any AI key the app still runs: exact checks, Tamil/Hindi rules, palette and alt-text checks work, and the page says the AI was unavailable.
+
+## Run it locally
+
+Needs Python 3.11+.
+
+```bash
+git clone https://github.com/deepshikakamal-08/brandproof.git
+cd brandproof
+pip install -r requirements.txt uvicorn
+
+# offline: no keys, mock AI, local SQLite
+cd api
+SERVE_STATIC=1 LLM_PROVIDER=mock python -m uvicorn index:app --port 8000
+# open http://localhost:8000
+
+# tests (from the repo root, no keys needed)
+cd .. && LLM_PROVIDER=mock python tests/test_engine.py
+```
+
+On Windows PowerShell set variables with `$env:SERVE_STATIC=1; $env:LLM_PROVIDER="mock"` before the uvicorn command.
+
+To use real AI locally, also set `LLM_PROVIDER=gemini` and `GEMINI_API_KEY` (see `.env.example`).
 
 ## Deploy (Vercel + Supabase)
 
-1. Create a Supabase project. Copy the **Transaction pooler** connection string (port 6543) from *Connect*.
-2. Import this repo into Vercel (Framework preset: **Other**). No build command is needed.
-3. Add environment variables:
+1. Create a Supabase project and copy the **Transaction pooler** connection string (port 6543). In Supabase, turn off the public Data API and keep row-level security on; the app connects directly.
+2. Import the repo into Vercel (Framework preset **Other**, no build command).
+3. Add environment variables (all listed in `.env.example`):
 
 | Name | Value |
 | --- | --- |
-| `DATABASE_URL` | Supabase transaction pooler URL, with your DB password |
-| `SECRET_KEY` | Any long random string |
-| `SARVAM_API_KEY` | Sarvam API key |
-| `LLM_PROVIDER` | `sarvam` |
-| `GEMINI_API_KEY` | Google AI Studio key (vision + embeddings) |
+| `DATABASE_URL` | Supabase transaction pooler URL |
+| `SECRET_KEY` | Long random string (signs sessions) |
+| `LLM_PROVIDER` | `gemini` (or `sarvam`) |
+| `GEMINI_API_KEY` | Google AI Studio key |
+| `GEMINI_MODEL`, `VISION_MODEL` | `gemini-3.5-flash-lite` |
+| `GEMINI_BACKUP_MODEL` | `gemini-3.1-flash-lite` (used when the main model is rate-limited) |
+| `SARVAM_API_KEY` | Optional |
+| `PUBLISH_CODE` | Optional: lets the owner publish evaluation results to every visitor |
 
-4. Deploy. Tables are created automatically on the first request. Open `/api/health` to confirm the database and models.
+4. Deploy. Tables are created on the first request. Open `/api/health?probe=1` to confirm the database and each AI provider.
 
-## Run locally
+## Security and privacy
 
-```bash
-pip install -r requirements.txt uvicorn
-cd api
-SERVE_STATIC=1 LLM_PROVIDER=mock python -m uvicorn index:app --port 8000
-# open http://localhost:8000   (SQLite is used when DATABASE_URL is not set)
-python ../tests/test_engine.py          # offline tests, no API keys needed
-```
+Signed, expiring sessions; every query filtered by organisation; role checks on approval, import and admin actions; keys only in environment variables; emails and phone numbers removed before any AI call; input size limits and image validation; rate limits on checks, imports, rewrites, API and new workspaces; escaped output; Content-Security-Policy and anti-framing headers. No auto-publishing: a person decides every change.
 
-## Changes from the Round 1 plan
+## Changes from the plan
 
-- Frontend in plain HTML/CSS/JavaScript instead of React: no build step, faster first load, nothing to break at deploy time.
-- Everything on Vercel (instead of Vercel + Render): one link, no cold-start sleep of a separate backend.
-- Sarvam `sarvam-105b` for text checks instead of Gemini; Gemini kept for vision and embeddings.
-- Hosted models instead of local models (Vercel functions can't run local LLMs); the separate NLI model is replaced by fact-grounded LLM claim checks plus the citation gate.
-- Guest demo workspaces with signed sessions instead of full sign-up, so judges can start instantly; each guest still gets an isolated organisation.
-- Retrieval uses BM25 + embeddings rank fusion in Python instead of pgvector (rulebooks are small; no extension needed).
-- Added: public check API, PDF guideline import, evaluation page.
+See the project PDF for the full list. In short: plain JS instead of React; everything on Vercel; hosted models instead of local ones; BM25 + embeddings instead of pgvector; guest workspaces instead of sign-up. In Round 3 the live AI moved from Sarvam to Gemini Flash Lite after the Sarvam trial credits ran out (the gateway supports both with one setting).
 
-## Round 3: three improvements
+## Roadmap
 
-1. **Learning from reviewer decisions to cut false flags.** Accept/dispute history per clause tunes severity and confidence thresholds and adds few-shot examples to the prompt. Target: false alarms ≤ 10% on the same test set.
-2. **Indian-language and code-mixed review** (Tamil, Hindi, Tanglish/Hinglish) using Sarvam's Indian-language strength, with a 20-draft labelled test set.
-3. **Guideline-gap assistant.** Clauses that are disputed often get a suggested clearer rewrite with do/don't examples for the admin to approve, with rulebook versioning.
+- Learn per channel and per reviewer, and suggest new exact rules from repeated accepted fixes.
+- More Indian languages (Telugu, Kannada, Malayalam, Bengali) and voice-note checks.
+- CMS, Google Docs and Slack integrations on top of `/api/v1/check`; SSO and real team accounts.
+- Logo detection on images and video frame checks.
+
+## AI disclosure
+
+AI coding assistants were used to help write this code. Inside the product, every AI finding is labelled with the model that produced it. The demo brand *Neem & Nila Skincare* and all its guidelines and facts are fictional.
 
 ## License
 

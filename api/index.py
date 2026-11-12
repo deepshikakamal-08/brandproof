@@ -44,7 +44,7 @@ def brand_of(user, brand_id=None):
 
 # ---------------- session ----------------
 class DemoIn(BaseModel):
-    name: Optional[str] = "Guest"
+    name: Optional[str] = Field("Guest", max_length=60)
     role: str = "creator"
 
 
@@ -56,8 +56,28 @@ def health(probe: int = 0):
     return out
 
 
+# ---------------- rate limits (shared across serverless instances via the database) ----------------
+def rate_limit(key, limit, window, what="requests"):
+    import random
+    import time as _t
+    now = _t.time()
+    n = db.one("SELECT COUNT(*) AS n FROM rate_events WHERE rkey = ? AND at > ?", (key, now - window))["n"]
+    if n >= limit:
+        mins = max(1, round(window / 60))
+        raise HTTPException(429, f"Too many {what}: the limit is {limit} every {mins} minutes. Please wait a little and try again.")
+    db.exec("INSERT INTO rate_events (rkey, at) VALUES (?, ?)", (key, now))
+    if random.random() < 0.02:  # occasional clean-up
+        db.exec("DELETE FROM rate_events WHERE at < ?", (now - 86400,))
+
+
+def client_ip(request: Request):
+    fwd = request.headers.get("x-forwarded-for", "")
+    return (fwd.split(",")[0].strip() or (request.client.host if request.client else "unknown"))[:64]
+
+
 @app.post("/api/session/demo")
-def demo_session(body: DemoIn):
+def demo_session(body: DemoIn, request: Request):
+    rate_limit("demo:" + client_ip(request), 30, 3600, "new demo workspaces")
     role = body.role if body.role in auth.ROLES else "creator"
     org_id, user_id = workspace.create_guest_workspace(body.name, role)
     return {"token": auth.sign(user_id, org_id), "role": role}
@@ -94,14 +114,30 @@ def samples(user=Depends(auth.current)):
 
 
 class DraftIn(BaseModel):
-    title: str = ""
-    channel: str = "social"
+    title: str = Field("", max_length=200)
+    channel: str = Field("social", max_length=20)
     text: str = Field("", max_length=20000)
-    image_b64: Optional[str] = None
-    alt_text: Optional[str] = None
+    image_b64: Optional[str] = Field(None, max_length=4_000_000)
+    alt_text: Optional[str] = Field(None, max_length=500)
     sample_id: Optional[str] = None
     pdf_b64: Optional[str] = None
     brand_id: Optional[str] = None
+
+
+def check_image(image):
+    """Reject images we can't open before they reach the check (instead of failing later)."""
+    if not image:
+        return
+    if len(image) > 3_000_000:
+        raise HTTPException(413, "Image too large. Use an image under 2 MB.")
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+        Image.open(io.BytesIO(base64.b64decode(image.split(",", 1)[-1], validate=False))).verify()
+    except Exception:
+        raise HTTPException(400, "That image couldn't be read. Upload a PNG, JPG or WebP file.")
 
 
 @app.post("/api/drafts")
@@ -120,8 +156,7 @@ def create_draft(body: DraftIn, user=Depends(auth.current)):
             text = rulebook.extract_text(body.pdf_b64)[:20000]
         except Exception:
             raise HTTPException(400, "Could not read that PDF.")
-    if image and len(image) > 3_000_000:
-        raise HTTPException(413, "Image too large. Use an image under 2 MB.")
+    check_image(image)
     if channel not in CHANNELS:
         raise HTTPException(400, f"channel must be one of {CHANNELS}")
     if not text.strip() and not image:
@@ -164,6 +199,7 @@ def draft_detail(draft_id: str, user=Depends(auth.current)):
 
 @app.post("/api/drafts/{draft_id}/check")
 def check_draft(draft_id: str, user=Depends(auth.current)):
+    rate_limit("check:" + user["org_id"], 40, 600, "checks")
     d = workflow.get_draft(user["org_id"], draft_id)
     if d["status"] in ("in_review", "approved"):
         raise HTTPException(400, "This draft is locked while in review or approved.")
@@ -185,6 +221,8 @@ def edit_draft(draft_id: str, body: EditIn, user=Depends(auth.current)):
         raise HTTPException(400, "This draft is locked while in review or approved.")
     v = workflow.current_version(user["org_id"], d)
     image = body.image_b64 or (v["image_b64"] if body.keep_image else None)
+    if body.image_b64:
+        check_image(body.image_b64)
     workflow.new_version(user["org_id"], d, user, body.text, image, body.alt_text, "Edited by creator")
     if d["status"] == "changes_requested":
         db.exec("UPDATE drafts SET status = 'draft' WHERE id = ?", (d["id"],))
@@ -325,6 +363,7 @@ class ImportIn(BaseModel):
 @app.post("/api/rulebook/import")
 def import_rulebook(body: ImportIn, user=Depends(auth.current)):
     auth.require(user, "admin", "manager")
+    rate_limit("import:" + user["org_id"], 10, 3600, "guideline imports")
     if not body.pdf_b64 and not (body.text or "").strip():
         raise HTTPException(400, "Upload a PDF or paste guideline text.")
     try:
@@ -362,6 +401,7 @@ class SuggestIn(BaseModel):
 @app.post("/api/rulebook/gaps/suggest")
 def rulebook_suggest(body: SuggestIn, user=Depends(auth.current)):
     auth.require(user, "admin", "manager")
+    rate_limit("suggest:" + user["org_id"], 20, 600, "rewrite suggestions")
     try:
         return gaps.suggest(user["org_id"], brand_of(user, body.brand_id), body.code, body.reason or "")
     except ValueError as e:
@@ -417,6 +457,7 @@ def demo_brand(user):
 @app.post("/api/eval/cases/{case_id}")
 def eval_case(case_id: str, learn: int = 1, train: int = 0, user=Depends(auth.current)):
     """learn=0 ignores reviewer history; train=1 replays the draft's labels as reviewer decisions."""
+    rate_limit("eval:" + user["org_id"], 160, 1800, "evaluation checks")
     r = evaluation.score_case(user["org_id"], demo_brand(user), case_id, learn=bool(learn), train=bool(train))
     if not r:
         raise HTTPException(404, "Unknown case")
@@ -499,6 +540,7 @@ def eval_publish(body: PublishIn, user=Depends(auth.current)):
     """Owner only (needs PUBLISH_CODE): show this workspace's latest results to every new visitor,
     so judges see full numbers without spending AI quota."""
     import hmac
+    rate_limit("publish:" + user["org_id"], 5, 600, "publish attempts")
     want = os.getenv("PUBLISH_CODE", "")
     if not want or not hmac.compare_digest(body.code.strip(), want.strip()):
         raise HTTPException(403, "Wrong publish code.")
@@ -528,9 +570,13 @@ class CheckIn(BaseModel):
 @app.post("/api/v1/check")
 def public_check(body: CheckIn, user=Depends(auth.current)):
     """Stateless check for integrations (CMS hooks, browser extensions): nothing is stored."""
+    rate_limit("v1:" + user["org_id"], 30, 600, "API checks")
     if body.channel not in CHANNELS:
         raise HTTPException(400, f"channel must be one of {CHANNELS}")
     b = brand_of(user, body.brand_id)
+    check_image(body.image_b64)
+    if not (body.text or "").strip() and not body.image_b64:
+        raise HTTPException(400, "Send some text or an image to check.")
     res = engine.run_check(user["org_id"], b, {"text": body.text, "image_b64": body.image_b64,
                                                 "alt_text": body.alt_text}, body.channel)
     res.pop("content_hash", None)

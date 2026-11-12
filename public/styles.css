@@ -389,3 +389,26 @@ table.cmp td:nth-child(2), table.cmp td:nth-child(3) { text-align: center; } tab
 @media (max-width: 760px) { .sg-cols { grid-template-columns: 1fr; } }
 .pub-note { color: var(--primary-2); margin: .2rem 0 .5rem; }
 .owner { margin: 1.4rem 0 .5rem; } .owner summary { cursor: pointer; } .owner .row { margin-top: .5rem; max-width: 420px; }
+
+/* ---------- compact samples + small helpers ---------- */
+.samples.compact { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.samples.compact .sample { padding: .6rem .75rem; min-height: 0; }
+.samples.compact .sample b { font-size: .9rem; }
+.seg { display: inline-flex; background: var(--bg); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; padding: .3rem .7rem; font-size: .8rem; border-radius: 7px; box-shadow: none; }
+.seg button.on { background: #fff; color: var(--primary); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.tip { border-bottom: 1px dotted var(--ink-3); cursor: help; font-size: .85em; margin-left: .3rem; }
+details.panel > summary { cursor: pointer; }
+
+/* ---------- judge guide ---------- */
+#guide { position: fixed; right: 18px; bottom: 18px; z-index: 60; display: flex; flex-direction: column; align-items: flex-end; gap: .5rem; }
+#guide .guide-btn { background: var(--primary); color: #fff; border: 0; border-radius: 999px; padding: .55rem 1rem; font-weight: 700; box-shadow: 0 6px 20px rgba(36,59,143,.3); }
+#guide .guide-btn:hover { background: var(--primary-2); color: #fff; }
+.guide-panel { display: none; width: 300px; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: .9rem 1rem; box-shadow: 0 12px 40px rgba(20,30,60,.18); order: -1; }
+#guide.open .guide-panel { display: block; }
+.guide-panel ol { margin: .5rem 0; padding-left: 1.2rem; } .guide-panel li { margin: .35rem 0; font-size: .9rem; }
+.guide-panel li.done { color: var(--ok); text-decoration: line-through; text-decoration-color: rgba(23,102,58,.35); }
+.guide-panel li.done::marker { content: "✓  "; }
+#guide.pulse .guide-btn { animation: gpulse .7s ease; }
+@keyframes gpulse { 0% { transform: scale(1); } 40% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@media (max-width: 600px) { .guide-panel { width: calc(100vw - 36px); } }

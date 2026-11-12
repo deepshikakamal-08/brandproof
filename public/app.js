@@ -68,16 +68,67 @@ function checkingOverlay() {
 }
 async function withChecking(fn) { const done = checkingOverlay(); try { return await fn(); } finally { done(); } }
 
+const store = {  // browser storage can be blocked (private windows): never let that break the app
+  get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (_) { /* ignore */ } },
+  del(k) { try { localStorage.removeItem(k); } catch (_) { /* ignore */ } },
+};
 async function api(method, path, body) {
-  const res = await fetch(path, {
-    method, headers: { "Content-Type": "application/json", ...(S.token ? { Authorization: "Bearer " + S.token } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 130000);
+  let res;
+  try {
+    res = await fetch(path, {
+      method, signal: ctl.signal,
+      headers: { "Content-Type": "application/json", ...(S.token ? { Authorization: "Bearer " + S.token } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) {
+    throw new Error(e.name === "AbortError" ? "This is taking too long. Please try again." : "Can't reach Brandproof. Check your internet connection and try again.");
+  } finally { clearTimeout(timer); }
   let data = null;
   try { data = await res.json(); } catch (_) { /* empty */ }
-  if (res.status === 401) { localStorage.removeItem("bp_token"); S.token = null; }
+  if (res.status === 401) { store.del("bp_token"); S.token = null; }
+  if (res.status === 429) throw new Error((data && data.detail) || "Too many requests. Please wait a minute and try again.");
+  if (res.status >= 500 && !(data && data.detail)) throw new Error("Something went wrong on our side. Please try again.");
   if (!res.ok) throw new Error((data && data.detail && (typeof data.detail === "string" ? data.detail : data.detail[0]?.msg)) || `Request failed (${res.status})`);
+  guideTrack(method, path, body);
   return data;
+}
+
+/* ---------------- judge guide: 6 steps, ticked automatically ---------------- */
+const GUIDE = [
+  ["check", "Check a sample draft", "#/new"],
+  ["decide", "Accept, edit or dispute an issue", null],
+  ["submit", "Submit the draft for review", null],
+  ["approve", "Switch Role to Manager and approve it", "#/queue"],
+  ["lang", "Check a Tamil or Hindi sample", "#/new"],
+  ["explore", "Open Learning, Rulebook versions or Evaluation", "#/learning"],
+];
+let guideDone = new Set((store.get("bp_guide") || "").split(",").filter(Boolean));
+function guideMark(k) {
+  if (guideDone.has(k)) return;
+  guideDone.add(k); store.set("bp_guide", [...guideDone].join(",")); renderGuide(true);
+}
+function guideTrack(method, path, body) {
+  if (method !== "POST") return;
+  if (/\/api\/drafts\/[^/]+\/check$/.test(path)) guideMark("check");
+  else if (/\/api\/findings\/[^/]+\/decision$/.test(path)) guideMark("decide");
+  else if (/\/submit$/.test(path)) guideMark("submit");
+  else if (/\/review$/.test(path) && body && body.action === "approve") guideMark("approve");
+  else if (path === "/api/drafts" && body && /^r\d/.test(body.sample_id || "")) guideMark("lang");
+}
+function renderGuide(pulse) {
+  let g = $("#guide");
+  if (!S.token) { if (g) g.remove(); return; }
+  if (!g) { g = document.createElement("div"); g.id = "guide"; document.body.appendChild(g); }
+  const n = GUIDE.filter(([k]) => guideDone.has(k)).length, open = g.classList.contains("open");
+  g.innerHTML = `<button class="guide-btn" id="guideBtn">${n === GUIDE.length ? "✓ Tour done" : `Try this · ${n}/${GUIDE.length}`}</button>
+    <div class="guide-panel"><b>Try Brandproof in 3 minutes</b>
+      <ol>${GUIDE.map(([k, t, href]) => `<li class="${guideDone.has(k) ? "done" : ""}">${href && !guideDone.has(k) ? `<a href="${href}">${t}</a>` : t}</li>`).join("")}</ol>
+      <p class="small muted">No sign-in needed. Use <b>Role</b> (top right) to act as creator, manager, reviewer or admin.</p></div>`;
+  if (open) g.classList.add("open");
+  if (pulse) { g.classList.remove("pulse"); void g.offsetWidth; g.classList.add("pulse"); }
+  $("#guideBtn").onclick = () => g.classList.toggle("open");
 }
 async function busy(btn, fn, label) {
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = `<span class="spinner${btn.classList.contains("btn-primary") || btn.classList.contains("btn-good") ? "" : " dark"}"></span> ${label || "Working…"}`;
@@ -87,12 +138,12 @@ async function busy(btn, fn, label) {
 /* ---------------- session ---------------- */
 async function startDemo(role = "creator") {
   const d = await api("POST", "/api/session/demo", { name: "Guest", role });
-  S.token = d.token; localStorage.setItem("bp_token", d.token);
+  S.token = d.token; store.set("bp_token", d.token);
   await loadMe();
 }
 async function loadMe() {
   S.me = await api("GET", "/api/me");
-  const saved = localStorage.getItem("bp_brand");
+  const saved = store.get("bp_brand");
   S.brandId = S.me.brands.find(b => b.id === saved) ? saved : S.me.brands[0]?.id;
   $("#topbar").hidden = false; $("#demoBanner").hidden = S.me.org.kind !== "guest";
   $("#roleSelect").value = S.me.role;
@@ -109,7 +160,7 @@ $("#roleSelect").addEventListener("change", async e => {
   try { await api("POST", "/api/session/role", { role: e.target.value }); S.me.role = e.target.value; toast(`You are now acting as ${e.target.value}`); route(); }
   catch (err) { toast(err.message, true); e.target.value = S.me.role; }
 });
-$("#brandSelect").addEventListener("change", e => { S.brandId = e.target.value; localStorage.setItem("bp_brand", S.brandId); route(); });
+$("#brandSelect").addEventListener("change", e => { S.brandId = e.target.value; store.set("bp_brand", S.brandId); route(); });
 $("#menuBtn").addEventListener("click", () => $("#nav").classList.toggle("open"));
 
 /* ---------------- router ---------------- */
@@ -123,7 +174,9 @@ async function route() {
   $("#nav").classList.remove("open");
   document.querySelectorAll("[data-nav]").forEach(a => a.classList.toggle("active", h.startsWith("#/" + a.dataset.nav) || (a.dataset.nav === "drafts" && h.startsWith("#/d/"))));
   if (!S.token && h !== "#/" && h !== "" && h !== "#/how") { location.hash = "#/"; return; }
-  if (S.token && !S.me) { try { await loadMe(); } catch (_) { S.token = null; localStorage.removeItem("bp_token"); location.hash = "#/"; return; } }
+  if (S.token && !S.me) { try { await loadMe(); } catch (_) { S.token = null; store.del("bp_token"); location.hash = "#/"; return; } }
+  if (/^#\/(learning|eval|rulebook)/.test(h)) guideMark("explore");
+  renderGuide();
   for (const [re, fn] of routes) {
     const m = h.match(re);
     if (m) { window.scrollTo(0, 0); try { await fn(...m.slice(1)); enter(); } catch (e) { app.innerHTML = `<div class="panel empty">${esc(e.message)}<br><br><a href="#/new">Back to New check</a></div>`; } return; }
@@ -174,19 +227,18 @@ async function newCheck() {
   if (!S.samples) S.samples = await api("GET", "/api/samples");
   const demoBrand = (S.me.brands.find(b => b.id === S.brandId) || {}).name === "Neem & Nila Skincare";
   app.innerHTML = `
-  <div class="page-head"><div><h1>New check</h1><p class="muted">Pick a sample or bring your own content. It's checked against the <b>${esc((S.me.brands.find(b => b.id === S.brandId) || {}).name)}</b> rulebook.</p></div></div>
+  <div class="page-head"><div><h1>New check</h1><p class="muted">Pick a sample, or paste your own content.</p></div></div>
   <div class="grid-2">
     <div class="panel">
-      <h2>Try a sample</h2>
-      ${demoBrand ? `<p class="muted small">Real-world drafts written with typical mistakes. Two are compliant, to show what a clean result looks like.</p>
-      <div class="samples">${S.samples.map(s => `<button class="sample" data-sample="${s.id}"><b>${esc(s.title.split(" — ")[0])}</b><span>${esc(s.text)}</span><i class="chan">${s.lang ? `<span class="lang-tag">${esc(s.lang)}</span> ` : ""}${CHANNEL[s.channel] || s.channel}${s.has_image ? " · image" : ""}</i></button>`).join("")}</div>`
+      <div class="iss-head"><h2>Samples</h2>${demoBrand ? `<div class="seg" id="sampleTabs"><button class="on" data-tab="en">English</button><button data-tab="indic">Tamil &amp; Hindi</button></div>` : ""}</div>
+      ${demoBrand ? `<div class="samples compact">${S.samples.map(s => `<button class="sample" data-sample="${s.id}" data-set="${s.lang ? "indic" : "en"}" ${s.lang ? "hidden" : ""}><b>${esc(s.title.split(" — ")[0])}</b><i class="chan">${s.lang ? `<span class="lang-tag">${esc(s.lang)}</span> ` : ""}${CHANNEL[s.channel] || s.channel}${s.has_image ? " · image" : ""}</i></button>`).join("")}</div>`
       : `<p class="muted">Samples are written for the Neem &amp; Nila demo brand. Switch brand in the top bar to use them, or check your own content here.</p>`}
     </div>
     <div class="panel">
       <h2>Check your own content</h2>
       <label class="field"><span>Title</span><input id="fTitle" placeholder="e.g. Diwali serum post"></label>
       <label class="field"><span>Channel</span><select id="fChannel">${Object.entries(CHANNEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}</select></label>
-      <label class="field"><span>Text</span><textarea id="fText" placeholder="Paste a caption, email, blog paragraph or press note…"></textarea></label>
+      <label class="field"><span>Text</span><textarea id="fText" maxlength="20000" placeholder="Paste a caption, email, blog paragraph or press note (any language)…"></textarea></label>
       <label class="field"><span>Image (optional)</span><span class="drop"><input id="fImage" type="file" accept="image/png,image/jpeg,image/webp"><span class="drop-text" data-for="fImage">Click to add a PNG or JPG</span></span></label>
       <div id="imgPrev"></div>
       <label class="field"><span>Alt text for the image</span><input id="fAlt" placeholder="Describe what the image shows"></label>
@@ -195,6 +247,10 @@ async function newCheck() {
     </div>
   </div>`;
   let image = null, pdf = null;
+  app.querySelectorAll("#sampleTabs [data-tab]").forEach(t => t.onclick = () => {
+    app.querySelectorAll("#sampleTabs [data-tab]").forEach(x => x.classList.toggle("on", x === t));
+    app.querySelectorAll(".sample[data-set]").forEach(b => { b.hidden = b.dataset.set !== t.dataset.tab; });
+  });
   app.querySelectorAll("[data-sample]").forEach(b => b.onclick = () => busy(b, () => withChecking(async () => {
     const d = await api("POST", "/api/drafts", { sample_id: b.dataset.sample, brand_id: S.brandId });
     await api("POST", `/api/drafts/${d.id}/check`); location.hash = "#/d/" + d.id;
@@ -370,7 +426,7 @@ function findingsHtml(draft, check, findings, editable) {
     ${ai === "failed" ? `<div class="warn small">AI review didn't respond this time, so only rule-based checks are shown. <b>Re-run check</b> to try again.</div>` : ""}
     ${ai === "not_configured" ? `<div class="warn small">AI checks aren't configured; showing rule-based checks only.</div>` : ""}
     ${s.language && s.language.indic ? `<div class="lang-note small"><span class="lang-tag">${esc(s.language.label)}</span> Checked against the English rulebook in the draft's own language; fixes keep the same language and script.</div>` : ""}
-    ${check.model ? `<div class="ai-note small"><span class="ai-dot"></span>AI-assisted by <b>${esc(check.model.replace("sarvam_flash:", "Sarvam ").replace("sarvam:", "Sarvam ").replace("gemini:", "Gemini "))}</b> · every AI finding cites a clause or fact</div>` : ""}
+    ${check.model ? `<div class="ai-note small"><span class="ai-dot"></span>AI-assisted by <b>${esc(check.model.replace("sarvam_flash:", "Sarvam ").replace("sarvam:", "Sarvam ").replace("gemini_backup:", "Gemini ").replace("gemini:", "Gemini "))}</b> · every AI finding cites a clause or fact</div>` : ""}
     ${(s.verified_claims || []).length ? `<p class="verified small">✓ Verified against the fact sheet: ${s.verified_claims.map(v => `“${esc(v.quote)}” (${esc(v.cite_code)})`).join(", ")}</p>` : ""}
     ${!findings.length ? `<div class="okbox">No issues found. This content follows the rulebook.</div>` : ""}
     ${disputedFirst && findings.some(f => f.decision === "disputed" && f.severity === "high" && ["claims", "legal"].includes(f.category)) ? `<div class="warn small">A high-severity claim was disputed: a manager must add a comment to approve, or a Reviewer can approve directly.</div>` : ""}
@@ -527,7 +583,7 @@ async function rulebook() {
     const f = $("#impPdf").files[0];
     const body = { name: $("#impName").value || "Imported brand", text: $("#impText").value, pdf_b64: f ? await fileB64(f) : null };
     const r = await api("POST", "/api/rulebook/import", body);
-    await loadMe(); S.brandId = r.brand_id; localStorage.setItem("bp_brand", r.brand_id); $("#brandSelect").value = r.brand_id;
+    await loadMe(); S.brandId = r.brand_id; store.set("bp_brand", r.brand_id); $("#brandSelect").value = r.brand_id;
     toast(`Imported ${r.clauses} clauses and ${r.terms} terms${r.used_ai ? "" : " (AI classification unavailable, used rules)"}`); rulebook();
   }, "Importing…");
   if ($("#confirmAll")) $("#confirmAll").onclick = e => busy(e.currentTarget, async () => { await api("POST", "/api/rulebook/confirm-all?brand_id=" + S.brandId); rulebook(); }, "Confirming…");
@@ -550,15 +606,15 @@ function clauseHtml(c, canEdit) {
 function gapsHtml(gp, canEdit) {
   const list = gp.candidates;
   return `<div class="panel gaps" id="gapsPanel"><div class="iss-head"><h2>Guideline gaps</h2><span class="muted small">${list.length ? `${list.length} guideline${list.length > 1 ? "s" : ""} look unclear` : ""}</span></div>
-    <p class="muted small">Guidelines that reviewers often dispute, or that the AI applies with low confidence, get a suggested clearer wording with do/don't examples. Nothing changes until an admin approves it.</p>
+    <p class="muted small">Often-disputed guidelines get a clearer rewrite with do/don't examples. Nothing changes until an admin approves.</p>
     ${list.length ? list.map(g => `<div class="gap" data-gap="${esc(g.code)}">
         <div class="row"><span class="code">${esc(g.code)}</span><b>${esc(g.title)}</b><span class="spacer"></span>${canEdit && !g.suggestion ? `<button class="btn-sm btn-primary" data-suggest="${esc(g.code)}" data-reason="${esc(g.reason)}">Suggest clearer wording</button>` : ""}</div>
         <p class="small gap-why">${esc(g.reason)}</p>
         <div class="slot">${g.suggestion ? suggestionHtml(g.suggestion, canEdit) : ""}</div></div>`).join("")
-      : `<div class="empty small">No unclear guidelines yet. They appear here once reviewers dispute a guideline's flags (try the learning experiment on <a href="#/eval">Evaluation</a>)${canEdit ? ", or click <b>Clarify</b> on any AI-judged guideline below" : ""}.</div>`}
+      : `<div class="empty small">None yet.${canEdit ? " Click <b>Clarify</b> on any AI-judged guideline below to try it." : ""}</div>`}
     <div id="gapAdhoc"></div>
     ${gp.recent.length ? `<details class="small" style="margin-top:.6rem"><summary>Recent decisions (${gp.recent.length})</summary>${gp.recent.map(r => `<div class="hidden-item"><b>${esc(r.code)}</b> ${r.status === "approved" ? `<span class="good">approved → v${r.version}</span>` : `<span class="muted">rejected</span>`} by ${esc(r.decided_by || "")}<div class="muted">${esc(r.new_text)}</div></div>`).join("")}</details>` : ""}
-    ${canEdit ? "" : `<p class="small muted">Switch Role to Admin or Manager to request and approve rewrites.</p>`}</div>`;
+    </div>`;
 }
 function suggestionHtml(sg, canEdit) {
   return `<div class="suggestion" data-sid="${sg.id}">
@@ -639,18 +695,17 @@ async function evaluation() {
   const [allCases, last, exp, indic] = await Promise.all([api("GET", "/api/eval/cases"), api("GET", "/api/eval/latest"), api("GET", "/api/eval/latest?kind=experiment"), api("GET", "/api/eval/latest?kind=indic")]);
   const cases = allCases.filter(c => c.set === "main"), icases = allCases.filter(c => c.set === "indic");
   app.innerHTML = `
-  <div class="page-head"><div><h1>Evaluation</h1><p class="muted">How accurate is Brandproof? We run it on ${cases.length} labelled drafts (${cases.reduce((a, c) => a + c.expected, 0)} known issues) and measure what it catches and what it gets wrong.</p></div>
-    <button class="btn-primary" id="runEval">Run evaluation now</button></div>
-  <div class="panel"><p class="small muted"><b>How it's scored.</b> Each test draft was labelled by hand with the issues a careful brand reviewer would flag. A finding counts as correct if it matches a labelled issue of the same type at the same place. <b>Precision</b> = share of flags that were right (low precision means false alarms). <b>Recall</b> = share of real issues caught.</p>
-    <div id="evalProgress"></div></div>
-  <div class="panel exp"><div class="iss-head"><h2>Learning experiment: does learning from reviewers cut false alarms?</h2>
+  <div class="page-head"><div><h1>Evaluation</h1><p class="muted">Accuracy on ${cases.length} hand-labelled drafts (${cases.reduce((a, c) => a + c.expected, 0)} known issues). <span class="tip" title="A flag is correct if it matches a labelled issue of the same type at the same place. Precision = share of flags that were right. Recall = share of real issues caught.">How it's scored</span></p></div>
+    <button class="btn-primary" id="runEval">Run evaluation</button></div>
+  <div id="evalProgress"></div>
+  <div id="evalOut">${last ? publishedNote(last.results) + evalReport(last.results, last.ran_at) : `<div class="panel empty">Not run yet. Click <b>Run evaluation</b> (2–4 min).</div>`}</div>
+  <div class="panel exp"><div class="iss-head"><h2>Learning: before vs after</h2>
       <button class="btn-sm" id="runExp">Run experiment</button></div>
-    <p class="small muted">Fair test: Brandproof learns only from the <b>12 sample drafts</b> (their hand labels are replayed as reviewer accepts and disputes), then is measured on the <b>18 other drafts it never saw</b>, before and after learning. About 4–6 minutes with AI.</p>
+    <p class="small muted">Learns from 12 labelled drafts, then tested on 18 drafts it never saw. 4–6 min.</p>
     <div id="expProgress"></div><div id="expOut">${publishedNote(exp && exp.results)}${experimentReport(exp && exp.results, exp && exp.ran_at)}</div></div>
-  <div id="evalOut">${last ? publishedNote(last.results) + evalReport(last.results, last.ran_at) : `<div class="panel empty">No evaluation run yet in this workspace. Click <b>Run evaluation now</b> (about 2–4 minutes with AI).</div>`}</div>
-  <div class="panel exp indic"><div class="iss-head"><h2>Indian languages: Tamil, Hindi, Tanglish, Hinglish</h2>
+  <div class="panel exp indic"><div class="iss-head"><h2>Tamil, Hindi, Tanglish, Hinglish</h2>
       <button class="btn-sm" id="runIndic">Run language evaluation</button></div>
-    <p class="small muted">${icases.length} more hand-labelled drafts (${icases.reduce((a, c) => a + c.expected, 0)} known issues) written in Tamil and Hindi script and in code-mixed Tanglish and Hinglish, checked against the same English rulebook. About 2–3 minutes.</p>
+    <p class="small muted">${icases.length} labelled drafts (${icases.reduce((a, c) => a + c.expected, 0)} known issues) against the same English rulebook. 2–3 min.</p>
     <div id="indicProgress"></div></div>
   <div id="indicOut">${indic ? publishedNote(indic.results) + evalReport(indic.results, indic.ran_at, true) : ""}</div>
   <details class="small muted owner"><summary>Team only: publish these results for every visitor</summary>
@@ -733,21 +788,21 @@ async function learningPage() {
   const canAdmin = ["admin", "manager"].includes(S.me.role);
   const counts = {}; L.clauses.forEach(c => (counts[c.mode] = (counts[c.mode] || 0) + 1));
   app.innerHTML = `
-  <div class="page-head"><div><h1>Learning</h1><p class="muted">Every <b>Accept</b>, <b>Edit</b> and <b>Dispute</b> teaches Brandproof what this brand's reviewers consider a real problem. Guidelines that are often disputed get quieter; guidelines that are always accepted stay strict.</p></div>
+  <div class="page-head"><div><h1>Learning</h1><p class="muted">Every Accept, Edit and Dispute teaches Brandproof what your reviewers count as a real problem.</p></div>
     ${canAdmin ? `<label class="switch"><input type="checkbox" id="learnAll" ${L.enabled ? "checked" : ""}><span>Learning ${L.enabled ? "on" : "off"}</span></label>` : ""}</div>
   <div class="kpis">
-    <div class="kpi"><b>${L.decisions}</b><span>decisions learned from${L.calibration_decisions ? ` (${L.reviewer_decisions} by reviewers, ${L.calibration_decisions} from labelled training drafts)` : ""}</span></div>
-    <div class="kpi"><b>${L.ai_threshold ? Math.round(L.ai_threshold * 100) + "%" : "–"}</b><span>learned minimum AI confidence${L.ai_threshold ? "" : " (needs 6+ AI decisions incl. a dispute)"}</span></div>
+    <div class="kpi"><b>${L.decisions}</b><span>decisions learned from${L.calibration_decisions ? ` (${L.calibration_decisions} from training drafts)` : ""}</span></div>
+    <div class="kpi"><b>${L.ai_threshold ? Math.round(L.ai_threshold * 100) + "%" : "–"}</b><span>learned AI confidence cut-off</span></div>
     <div class="kpi"><b>${counts.softened || 0} / ${counts.muted || 0}</b><span>guidelines softened / muted</span></div>
     <div class="kpi"><b>${counts.trusted || 0}</b><span>guidelines trusted</span></div>
   </div>
-  <div class="panel how-learn"><h2>How it learns</h2><ol class="small">
+  <details class="panel how-learn"><summary><b>How it learns</b></summary><ol class="small">
     <li><b>Per guideline:</b> disputed in half or more of 2+ decisions → <b>softened</b> to low severity. AI flags disputed in 80%+ of 4+ decisions → <b>muted</b>. Exact rule checks are never hidden, only softened.</li>
     <li><b>Confidence cut-off:</b> from past AI decisions it picks the minimum confidence that keeps the most accepted flags and drops the most disputed ones.</li>
     <li><b>Examples for the AI:</b> up to 3 recent accepted and disputed cases per guideline are added to the AI prompt, so the model follows your reviewers' judgement.</li>
     <li><b>No repeats:</b> text that reviewers already disputed for a guideline (and never accepted) isn't flagged again.</li>
-    <li><b>Always visible:</b> hidden flags are listed under each check, and admins or managers can switch learning off for any guideline.</li></ol></div>
-  ${!L.clauses.length ? `<div class="panel empty">Nothing learned yet. Check a draft and <b>Accept</b> or <b>Dispute</b> its issues, or run the <a href="#/eval">learning experiment</a> on the Evaluation page to load 12 labelled training drafts as past decisions.</div>` : `
+    <li><b>Always visible:</b> hidden flags are listed under each check, and admins or managers can switch learning off for any guideline.</li></ol></details>
+  ${!L.clauses.length ? `<div class="panel empty">Nothing learned yet. Accept or dispute a few issues, or run the <a href="#/eval">learning experiment</a>.</div>` : `
   <div class="panel"><h2>What it learned, per guideline</h2>
     <table class="learn-table"><thead><tr><th>Guideline / fact</th><th>Accepted</th><th>Disputed</th><th>Disputed share</th><th>Effect</th>${canAdmin ? "<th></th>" : ""}</tr></thead><tbody>
     ${L.clauses.map(c => `<tr>
@@ -874,7 +929,7 @@ const ARCH_SVG = `<svg class="arch" viewBox="0 0 760 470" role="img" aria-label=
 <g><rect x="272" y="306" width="216" height="64" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="380" y="328" text-anchor="middle" font-weight="700" fill="#121826">Workflow</text><text x="380" y="346" text-anchor="middle" font-size="11.5" fill="#4A5468">Versions, accept / edit / dispute,</text><text x="380" y="361" text-anchor="middle" font-size="11.5" fill="#4A5468">approvals, comments, audit log</text></g>
 <g><rect x="504" y="306" width="216" height="64" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="612" y="328" text-anchor="middle" font-weight="700" fill="#121826">Insights + evaluation</text><text x="612" y="346" text-anchor="middle" font-size="11.5" fill="#4A5468">Recurring issues, unclear clauses,</text><text x="612" y="361" text-anchor="middle" font-size="11.5" fill="#4A5468">precision / recall per check type</text></g>
 <g><rect x="24" y="410" width="344" height="52" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="196" y="432" text-anchor="middle" font-weight="700" fill="#121826">Supabase Postgres</text><text x="196" y="450" text-anchor="middle" font-size="11.5" fill="#4A5468">Per-organisation data, audit log, check cache</text></g>
-<g><rect x="392" y="410" width="344" height="52" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="564" y="432" text-anchor="middle" font-weight="700" fill="#121826">AI gateway</text><text x="564" y="450" text-anchor="middle" font-size="11.5" fill="#4A5468">Redaction, retries · Sarvam (text) · vision · embeddings</text></g>
+<g><rect x="392" y="410" width="344" height="52" rx="8" fill="#fff" stroke="#9AA3B5"/><text x="564" y="432" text-anchor="middle" font-weight="700" fill="#121826">AI gateway</text><text x="564" y="450" text-anchor="middle" font-size="11.5" fill="#4A5468">Redaction · retries · fallback · Gemini / Sarvam</text></g>
 </svg>`;
 
 document.addEventListener("change", e => {
@@ -882,5 +937,5 @@ document.addEventListener("change", e => {
 });
 
 /* ---------------- boot ---------------- */
-S.token = localStorage.getItem("bp_token");
+S.token = store.get("bp_token");
 route();

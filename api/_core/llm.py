@@ -31,7 +31,7 @@ PROVIDERS = {
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "key": "GEMINI_API_KEY",
-        "model": os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+        "model": os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip(),
     },
     # A second Gemini model with its own free quota, used when the first is rate-limited (429).
     "gemini_backup": {
